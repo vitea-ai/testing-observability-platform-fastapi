@@ -1,0 +1,96 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: eval-postgres-fastapi
+    environment:
+      POSTGRES_DB: ${DB_NAME:-evaluation_db}
+      POSTGRES_USER: ${DB_USER:-dbadmin}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres123}
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-dbadmin} -d ${DB_NAME:-evaluation_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - vitea-shared-network
+
+  # FastAPI Application
+  api:
+    image: testing-observability-platform-fastapi:latest
+    container_name: eval-api-fastapi
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      APP_PORT: 8000
+      APP_DATABASE_URL: postgresql://${DB_USER:-dbadmin}:${DB_PASSWORD:-postgres123}@postgres:5432/${DB_NAME:-evaluation_db}
+      APP_EVALUATOR_SERVICE_URL: http://evaluator-service:8001
+      APP_DEPLOYMENT_TIER: ${APP_DEPLOYMENT_TIER:-integration}
+      APP_ENABLE_AUTHENTICATION: ${APP_ENABLE_AUTHENTICATION:-false}
+      APP_ENABLE_AUDIT_LOGGING: ${APP_ENABLE_AUDIT_LOGGING:-true}
+      APP_ENABLE_HEALTHCARE_MODE: ${APP_ENABLE_HEALTHCARE_MODE:-true}
+    ports:
+      - "9000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./app:/app/app:ro
+      - ./alembic:/app/alembic:ro
+    networks:
+      - vitea-shared-network
+    restart: unless-stopped
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # AI Evaluator Service (Python) - References separate vitea-evaluators repo
+  evaluator-service:
+    build:
+      context: ../vitea-evaluators
+      dockerfile: Dockerfile
+    container_name: eval-evaluator-service-fastapi
+    volumes:
+      - ../vitea-evaluators/app:/app/app
+    env_file:
+      - ../vitea-evaluators/.env
+    environment:
+      - LOG_LEVEL=INFO
+    ports:
+      - "9002:8001"
+    networks:
+      - vitea-shared-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Redis Cache (Tier 3+)
+  redis:
+    image: redis:7-alpine
+    container_name: eval-redis-fastapi
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - vitea-shared-network
+    restart: unless-stopped
+    profiles:
+      - staging
+      - production
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  vitea-shared-network:
+    external: true

@@ -1,0 +1,520 @@
+"""
+Experiments endpoint for managing AI evaluation experiments.
+"""
+
+from typing import List, Optional, Dict, Any
+from uuid import UUID
+from datetime import datetime
+from enum import Enum
+
+from fastapi import APIRouter, HTTPException, status, Depends, Query, Body, BackgroundTasks
+from pydantic import BaseModel, Field, ConfigDict
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import settings
+from app.core.logging import logger
+from app.core.dependencies import (
+    get_current_user_optional,
+    get_current_user,
+    apply_rate_limit,
+    audit_log,
+    get_db
+)
+from app.services.experiment_service import ExperimentService
+from app.schemas.experiment import (
+    ExperimentStatus,
+    ExecutionMode,
+    AgentConfig,
+    ExperimentBase,
+    ExperimentCreate,
+    ExperimentUpdate,
+    ExperimentResponse,
+    ExperimentListResponse,
+    ExperimentResultItem,
+    ExperimentResults,
+    ExperimentExecuteRequest
+)
+
+router = APIRouter()
+
+
+# ==========================================
+# In-Memory Storage (Tier 1)
+# ==========================================
+experiments_storage: Dict[str, Dict[str, Any]] = {}
+experiment_results_storage: Dict[str, Dict[str, Any]] = {}
+
+
+# ==========================================
+# API Endpoints
+# ==========================================
+@router.get(
+    "/",
+    response_model=ExperimentListResponse,
+    summary="List experiments",
+    description="Retrieve a paginated list of experiments with optional filtering"
+)
+async def list_experiments(
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(20, ge=1, le=100, description="Items per page"),
+    status: Optional[ExperimentStatus] = Query(None, description="Filter by status"),
+    dataset_id: Optional[UUID] = Query(None, description="Filter by dataset"),
+    search: Optional[str] = Query(None, description="Search in name and description"),
+    db: AsyncSession = Depends(get_db) if settings.deployment_tier != "development" else None,
+    current_user = Depends(get_current_user_optional)
+):
+    """
+    List all experiments with pagination and filtering.
+    """
+    logger.info(f"Listing experiments - page: {page}, page_size: {page_size}")
+    
+    if settings.deployment_tier == "development":
+        # Tier 1: In-memory implementation
+        filtered_experiments = list(experiments_storage.values())
+        
+        # Apply filters
+        if status:
+            filtered_experiments = [e for e in filtered_experiments if e.get("status") == status]
+        if dataset_id:
+            filtered_experiments = [e for e in filtered_experiments if e.get("dataset_id") == str(dataset_id)]
+        if search:
+            search_lower = search.lower()
+            filtered_experiments = [
+                e for e in filtered_experiments
+                if search_lower in e.get("name", "").lower() or
+                   search_lower in e.get("description", "").lower()
+            ]
+        
+        # Pagination
+        total = len(filtered_experiments)
+        start = (page - 1) * page_size
+        end = start + page_size
+        paginated = filtered_experiments[start:end]
+        
+        return ExperimentListResponse(
+            experiments=[ExperimentResponse(**e) for e in paginated],
+            total=total,
+            page=page,
+            page_size=page_size
+        )
+    else:
+        # Tier 2+: Database implementation
+        service = ExperimentService(db)
+        result = await service.list_experiments(
+            page=page,
+            page_size=page_size,
+            status=status,
+            dataset_id=dataset_id,
+            search=search
+        )
+        return result
+
+
+@router.post(
+    "/",
+    response_model=ExperimentResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create experiment",
+    description="Create a new experiment"
+)
+async def create_experiment(
+    experiment: ExperimentCreate,
+    db: AsyncSession = Depends(get_db) if settings.deployment_tier != "development" else None,
+    current_user = Depends(get_current_user) if settings.is_feature_enabled("authentication") else Depends(get_current_user_optional)
+):
+    """
+    Create a new experiment.
+    """
+    logger.info(f"Creating experiment: {experiment.name}")
+    
+    if settings.deployment_tier == "development":
+        # Tier 1: In-memory implementation
+        from uuid import uuid4
+        
+        experiment_id = str(uuid4())
+        experiment_dict = experiment.model_dump()
+        experiment_dict.update({
+            "id": experiment_id,
+            "status": ExperimentStatus.PENDING,
+            "progress": 0.0,
+            "started_at": None,
+            "completed_at": None,
+            "created_at": datetime.utcnow(),
+            "updated_at": None
+        })
+        
+        # Convert agent_config to dict if needed
+        if isinstance(experiment_dict.get("agent_config"), AgentConfig):
+            experiment_dict["agent_config"] = experiment_dict["agent_config"].model_dump()
+        
+        experiments_storage[experiment_id] = experiment_dict
+        
+        if settings.is_feature_enabled("audit_logging"):
+            await audit_log(
+                action="experiment.create",
+                resource_id=experiment_id,
+                user=current_user.id if current_user else "anonymous",
+                details={"name": experiment.name}
+            )
+        
+        return ExperimentResponse(**experiment_dict)
+    else:
+        # Tier 2+: Database implementation
+        service = ExperimentService(db)
+        created = await service.create_experiment(
+            experiment,
+            created_by=current_user.id if current_user else "system"
+        )
+        return created
+
+
+@router.get(
+    "/{experiment_id}",
+    response_model=ExperimentResponse,
+    summary="Get experiment",
+    description="Retrieve a specific experiment by ID"
+)
+async def get_experiment(
+    experiment_id: UUID,
+    db: AsyncSession = Depends(get_db) if settings.deployment_tier != "development" else None,
+    current_user = Depends(get_current_user_optional)
+):
+    """
+    Get an experiment by ID.
+    """
+    logger.info(f"Getting experiment: {experiment_id}")
+    
+    if settings.deployment_tier == "development":
+        # Tier 1: In-memory implementation
+        experiment = experiments_storage.get(str(experiment_id))
+        if not experiment:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Experiment {experiment_id} not found"
+            )
+        return ExperimentResponse(**experiment)
+    else:
+        # Tier 2+: Database implementation
+        service = ExperimentService(db)
+        experiment = await service.get_experiment(experiment_id)
+        if not experiment:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Experiment {experiment_id} not found"
+            )
+        return experiment
+
+
+@router.put(
+    "/{experiment_id}",
+    response_model=ExperimentResponse,
+    summary="Update experiment",
+    description="Update an existing experiment"
+)
+async def update_experiment(
+    experiment_id: UUID,
+    experiment_update: ExperimentUpdate,
+    db: AsyncSession = Depends(get_db) if settings.deployment_tier != "development" else None,
+    current_user = Depends(get_current_user) if settings.is_feature_enabled("authentication") else Depends(get_current_user_optional)
+):
+    """
+    Update an experiment.
+    """
+    logger.info(f"Updating experiment: {experiment_id}")
+    
+    if settings.deployment_tier == "development":
+        # Tier 1: In-memory implementation
+        experiment = experiments_storage.get(str(experiment_id))
+        if not experiment:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Experiment {experiment_id} not found"
+            )
+        
+        # Check if experiment is running
+        if experiment.get("status") == ExperimentStatus.RUNNING:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot update a running experiment"
+            )
+        
+        # Update fields
+        update_data = experiment_update.model_dump(exclude_unset=True)
+        if "agent_config" in update_data and update_data["agent_config"]:
+            if isinstance(update_data["agent_config"], AgentConfig):
+                update_data["agent_config"] = update_data["agent_config"].model_dump()
+        
+        experiment.update(update_data)
+        experiment["updated_at"] = datetime.utcnow()
+        
+        if settings.is_feature_enabled("audit_logging"):
+            await audit_log(
+                action="experiment.update",
+                resource_id=str(experiment_id),
+                user=current_user.id if current_user else "anonymous",
+                details={"fields": list(update_data.keys())}
+            )
+        
+        return ExperimentResponse(**experiment)
+    else:
+        # Tier 2+: Database implementation
+        service = ExperimentService(db)
+        updated = await service.update_experiment(
+            experiment_id,
+            experiment_update,
+            updated_by=current_user.id if current_user else "system"
+        )
+        return updated
+
+
+@router.delete(
+    "/{experiment_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete experiment",
+    description="Delete an experiment"
+)
+async def delete_experiment(
+    experiment_id: UUID,
+    db: AsyncSession = Depends(get_db) if settings.deployment_tier != "development" else None,
+    current_user = Depends(get_current_user) if settings.is_feature_enabled("authentication") else Depends(get_current_user_optional)
+):
+    """
+    Delete an experiment.
+    """
+    logger.info(f"Deleting experiment: {experiment_id}")
+    
+    if settings.deployment_tier == "development":
+        # Tier 1: In-memory implementation
+        if str(experiment_id) not in experiments_storage:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Experiment {experiment_id} not found"
+            )
+        
+        experiment = experiments_storage[str(experiment_id)]
+        if experiment.get("status") == ExperimentStatus.RUNNING:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot delete a running experiment"
+            )
+        
+        del experiments_storage[str(experiment_id)]
+        
+        # Also delete results if any
+        if str(experiment_id) in experiment_results_storage:
+            del experiment_results_storage[str(experiment_id)]
+        
+        if settings.is_feature_enabled("audit_logging"):
+            await audit_log(
+                action="experiment.delete",
+                resource_id=str(experiment_id),
+                user=current_user.id if current_user else "anonymous"
+            )
+        
+        return None
+    else:
+        # Tier 2+: Database implementation
+        service = ExperimentService(db)
+        await service.delete_experiment(
+            experiment_id,
+            deleted_by=current_user.id if current_user else "system"
+        )
+        return None
+
+
+@router.post(
+    "/{experiment_id}/execute",
+    response_model=Dict[str, Any],
+    summary="Execute experiment",
+    description="Start executing an experiment"
+)
+async def execute_experiment(
+    experiment_id: UUID,
+    request: ExperimentExecuteRequest = Body(default=ExperimentExecuteRequest()),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    db: AsyncSession = Depends(get_db) if settings.deployment_tier != "development" else None,
+    current_user = Depends(get_current_user) if settings.is_feature_enabled("authentication") else Depends(get_current_user_optional)
+):
+    """
+    Execute an experiment asynchronously.
+    """
+    logger.info(f"Executing experiment: {experiment_id}")
+    
+    if settings.deployment_tier == "development":
+        # Tier 1: In-memory implementation
+        experiment = experiments_storage.get(str(experiment_id))
+        if not experiment:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Experiment {experiment_id} not found"
+            )
+        
+        if experiment.get("status") in [ExperimentStatus.RUNNING, ExperimentStatus.COMPLETED]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Experiment is already {experiment.get('status')}"
+            )
+        
+        # Update status to running
+        experiment["status"] = ExperimentStatus.RUNNING
+        experiment["started_at"] = datetime.utcnow()
+        experiment["progress"] = 0.0
+        
+        # In tier 1, we'll simulate execution
+        async def simulate_execution():
+            import asyncio
+            import random
+            
+            # Simulate processing
+            await asyncio.sleep(2)
+            
+            # Update experiment status
+            experiment["status"] = ExperimentStatus.COMPLETED
+            experiment["completed_at"] = datetime.utcnow()
+            experiment["progress"] = 100.0
+            
+            # Create mock results
+            experiment_results_storage[str(experiment_id)] = {
+                "experiment_id": str(experiment_id),
+                "status": ExperimentStatus.COMPLETED,
+                "total_tests": 10,
+                "passed_tests": 8,
+                "failed_tests": 2,
+                "error_tests": 0,
+                "execution_time": 2.5,
+                "results": [],
+                "summary": {
+                    "success_rate": 0.8,
+                    "avg_execution_time": 0.25
+                }
+            }
+            
+            logger.info(f"Experiment {experiment_id} completed")
+        
+        if settings.enable_background_tasks:
+            background_tasks.add_task(simulate_execution)
+        
+        if settings.is_feature_enabled("audit_logging"):
+            await audit_log(
+                action="experiment.execute",
+                resource_id=str(experiment_id),
+                user=current_user.id if current_user else "anonymous",
+                details={"batch_size": request.batch_size}
+            )
+        
+        return {
+            "message": "Experiment execution started",
+            "experiment_id": str(experiment_id),
+            "status": "running"
+        }
+    else:
+        # Tier 2+: Database implementation with real execution
+        service = ExperimentService(db)
+        result = await service.execute_experiment(
+            experiment_id,
+            batch_size=request.batch_size,
+            timeout=request.timeout,
+            evaluator_ids=request.evaluator_ids,
+            background_tasks=background_tasks
+        )
+        return result
+
+
+@router.get(
+    "/{experiment_id}/results",
+    response_model=ExperimentResults,
+    summary="Get experiment results",
+    description="Retrieve the results of an experiment"
+)
+async def get_experiment_results(
+    experiment_id: UUID,
+    db: AsyncSession = Depends(get_db) if settings.deployment_tier != "development" else None,
+    current_user = Depends(get_current_user_optional)
+):
+    """
+    Get the results of an experiment.
+    """
+    logger.info(f"Getting results for experiment: {experiment_id}")
+    
+    if settings.deployment_tier == "development":
+        # Tier 1: In-memory implementation
+        results = experiment_results_storage.get(str(experiment_id))
+        if not results:
+            experiment = experiments_storage.get(str(experiment_id))
+            if not experiment:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Experiment {experiment_id} not found"
+                )
+            
+            if experiment.get("status") != ExperimentStatus.COMPLETED:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Experiment is {experiment.get('status')}, results not available"
+                )
+            
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Results not found for this experiment"
+            )
+        
+        return ExperimentResults(**results)
+    else:
+        # Tier 2+: Database implementation
+        service = ExperimentService(db)
+        results = await service.get_experiment_results(experiment_id)
+        if not results:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Results not found for this experiment"
+            )
+        return results
+
+
+@router.post(
+    "/{experiment_id}/cancel",
+    response_model=ExperimentResponse,
+    summary="Cancel experiment",
+    description="Cancel a running experiment"
+)
+async def cancel_experiment(
+    experiment_id: UUID,
+    db: AsyncSession = Depends(get_db) if settings.deployment_tier != "development" else None,
+    current_user = Depends(get_current_user) if settings.is_feature_enabled("authentication") else Depends(get_current_user_optional)
+):
+    """
+    Cancel a running experiment.
+    """
+    logger.info(f"Cancelling experiment: {experiment_id}")
+    
+    if settings.deployment_tier == "development":
+        # Tier 1: In-memory implementation
+        experiment = experiments_storage.get(str(experiment_id))
+        if not experiment:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Experiment {experiment_id} not found"
+            )
+        
+        if experiment.get("status") != ExperimentStatus.RUNNING:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cannot cancel experiment with status {experiment.get('status')}"
+            )
+        
+        experiment["status"] = ExperimentStatus.CANCELLED
+        experiment["completed_at"] = datetime.utcnow()
+        
+        if settings.is_feature_enabled("audit_logging"):
+            await audit_log(
+                action="experiment.cancel",
+                resource_id=str(experiment_id),
+                user=current_user.id if current_user else "anonymous"
+            )
+        
+        return ExperimentResponse(**experiment)
+    else:
+        # Tier 2+: Database implementation
+        service = ExperimentService(db)
+        cancelled = await service.cancel_experiment(experiment_id)
+        return cancelled
