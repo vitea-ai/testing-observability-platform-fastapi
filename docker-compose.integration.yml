@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: fastapi_user
+      POSTGRES_PASSWORD: fastapi_pass
+      POSTGRES_DB: fastapi_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fastapi_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - fastapi-net
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - fastapi-net
+
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_DEPLOYMENT_TIER=integration
+      - APP_DEBUG=true
+      - APP_DATABASE_URL=postgresql://fastapi_user:fastapi_pass@postgres:5432/fastapi_db
+      - APP_REDIS_URL=redis://redis:6379/0
+      - APP_ENABLE_AUTHENTICATION=true
+      - APP_ENABLE_AUDIT_LOGGING=true
+      - APP_ENABLE_CACHING=true
+    command: >
+      sh -c "
+        alembic upgrade head &&
+        uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+      "
+    networks:
+      - fastapi-net
+
+  # Optional: Adminer for database management
+  adminer:
+    image: adminer
+    ports:
+      - "8080:8080"
+    networks:
+      - fastapi-net
+    depends_on:
+      - postgres
+
+volumes:
+  postgres_data:
+
+networks:
+  fastapi-net:
+    driver: bridge

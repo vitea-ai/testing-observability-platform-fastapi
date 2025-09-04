@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+    volumes:
+      - .:/app
+      - /app/.venv  # Exclude venv from sync
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_DEPLOYMENT_TIER=development
+      - APP_DEBUG=true
+      - APP_DATABASE_URL=sqlite:///./test.db
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    networks:
+      - fastapi-net
+
+networks:
+  fastapi-net:
+    driver: bridge

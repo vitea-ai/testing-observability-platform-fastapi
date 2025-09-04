@@ -1,0 +1,347 @@
+[project]
+name = "testing-observability-platform"
+version = "0.1.0"
+description = "AI Testing and Observability Platform with Healthcare Focus"
+authors = [
+    {name = "ViTea Team", email = "team@vitea.ai"}
+]
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+keywords = ["fastapi", "api", "template", "microservice", "rest"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Framework :: FastAPI",
+    "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
+]
+
+# ==========================================
+# Core Dependencies (Tier 1)
+# ==========================================
+dependencies = [
+    "fastapi[standard]>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.6.0",
+    "python-multipart>=0.0.9",
+    "structlog>=24.4.0",
+    "python-dotenv>=1.0.0",
+    "httpx>=0.28.0",
+    "psutil>=6.0.0",  # For system metrics
+    # Database dependencies (needed for our platform)
+    "sqlalchemy>=2.0.35",
+    "alembic>=1.13.0",
+    "psycopg[binary,pool]>=3.2.0",  # PostgreSQL driver
+    "asyncpg>=0.29.0",  # Async PostgreSQL driver
+    "python-jose[cryptography]>=3.3.0",  # For JWT
+    "passlib[bcrypt]>=1.7.4",  # For password hashing
+    "greenlet>=3.0.0",  # Required for SQLAlchemy async
+]
+
+# ==========================================
+# Optional Dependencies by Tier
+# ==========================================
+[project.optional-dependencies]
+# Development tools
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=5.0.0",
+    "black>=24.10.0",
+    "isort>=5.13.0",
+    "ruff>=0.6.0",
+    "mypy>=1.11.0",
+    "faker>=25.0.0",
+    "ipython>=8.27.0",
+    "rich>=13.8.0",
+    "pre-commit>=3.8.0",
+]
+
+# Testing
+test = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=5.0.0",
+    "pytest-mock>=3.14.0",
+    "httpx>=0.28.0",
+    "faker>=25.0.0",
+    "factory-boy>=3.3.0",
+]
+
+# Tier 2: Integration
+integration = [
+    "sqlalchemy>=2.0.35",
+    "alembic>=1.13.0",
+    "psycopg[binary,pool]>=3.2.0",  # Easier async PostgreSQL driver
+    "python-jose[cryptography]>=3.3.0",
+    "passlib[bcrypt]>=1.7.4",
+]
+
+# Tier 3: Staging
+staging = [
+    "redis>=5.2.0",
+    "prometheus-fastapi-instrumentator>=7.0.0",
+    "slowapi>=0.1.9",
+]
+
+# Tier 4: Production
+production = [
+    "cryptography>=42.0.0",
+    "hvac>=2.3.0",  # HashiCorp Vault
+    "ddtrace>=2.14.0",  # Datadog APM
+    "sentry-sdk[fastapi]>=2.13.0",
+    "circuitbreaker>=2.0.0",
+    "tenacity>=8.5.0",
+]
+
+# Optional: Maximum Performance (when you actually need it)
+performance = [
+    "asyncpg>=0.29.0",  # Blazing fast PostgreSQL driver (harder to use)
+    "orjson>=3.10.0",  # Fast JSON serialization
+    "uvloop>=0.20.0",  # Fast event loop
+]
+
+# All tiers combined (combine all optional dependencies)
+all = []
+
+# ==========================================
+# Project URLs
+# ==========================================
+[project.urls]
+"Homepage" = "https://github.com/yourorg/fastapi-template"
+"Bug Tracker" = "https://github.com/yourorg/fastapi-template/issues"
+"Documentation" = "https://github.com/yourorg/fastapi-template/docs"
+"Source Code" = "https://github.com/yourorg/fastapi-template"
+
+# ==========================================
+# Scripts
+# ==========================================
+[project.scripts]
+fastapi-template = "app.main:main"
+
+# ==========================================
+# Build System
+# ==========================================
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# ==========================================
+# uv Configuration
+# ==========================================
+[tool.uv]
+# Development dependencies (installed with `uv sync`)
+dev-dependencies = [
+    "pytest>=8.3.0",
+    "black>=24.10.0",
+    "ruff>=0.6.0",
+    "mypy>=1.11.0",
+    "ipython>=8.27.0",
+]
+
+# Cache configuration
+cache-dir = ".uv-cache"
+compile-bytecode = true
+link-mode = "copy"  # Better for Docker
+
+# Dependency resolution
+resolution = "highest"  # Use latest compatible versions
+prerelease = "disallow"
+native-tls = false
+
+# Package indexes
+index-url = "https://pypi.org/simple"
+extra-index-url = []
+
+# Environment management
+managed = true
+
+# ==========================================
+# Dependency Groups (PEP 735)
+# ==========================================
+[dependency-groups]
+# Development group (default)
+dev = [
+    "pytest>=8.3.0",
+    "black>=24.10.0",
+    "ruff>=0.6.0",
+    "mypy>=1.11.0",
+    "ipython>=8.27.0",
+    "rich>=13.8.0",
+]
+
+# Linting tools
+lint = [
+    "black>=24.10.0",
+    "ruff>=0.6.0",
+    "mypy>=1.11.0",
+]
+
+# Documentation
+docs = [
+    "mkdocs>=1.6.0",
+    "mkdocs-material>=9.5.0",
+    "mkdocstrings[python]>=0.25.0",
+]
+
+# ==========================================
+# Tool Configurations
+# ==========================================
+
+# Black formatter
+[tool.black]
+line-length = 88
+target-version = ['py311', 'py312']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | \.uv
+  | build
+  | dist
+  | migrations
+)/
+'''
+
+# isort import sorter
+[tool.isort]
+profile = "black"
+line_length = 88
+multi_line_output = 3
+include_trailing_comma = true
+force_grid_wrap = 0
+use_parentheses = true
+ensure_newline_before_comments = true
+skip_glob = ["**/migrations/*", "**/.venv/*"]
+
+# Ruff linter
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "UP",   # pyupgrade
+    "ARG",  # flake8-unused-arguments
+    "SIM",  # flake8-simplify
+]
+ignore = [
+    "E501",  # line too long (handled by black)
+    "B008",  # do not perform function calls in argument defaults
+    "W191",  # indentation contains tabs
+    "B904",  # raise from within except
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ARG", "S"]
+"scripts/*" = ["T201"]  # Allow print statements
+
+# Pytest configuration
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = [
+    "--strict-markers",
+    "--tb=short",
+    "--asyncio-mode=auto",
+    "--cov=app",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+    "--cov-fail-under=80",
+]
+markers = [
+    "unit: Unit tests",
+    "integration: Integration tests requiring database",
+    "slow: Slow tests",
+    "tier1: Tier 1 (development) tests",
+    "tier2: Tier 2 (integration) tests",
+    "tier3: Tier 3 (staging) tests",
+    "tier4: Tier 4 (production) tests",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+
+# Mypy type checker
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_any_generics = false
+ignore_missing_imports = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+check_untyped_defs = true
+strict_equality = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+ignore_errors = true
+
+# Coverage configuration
+[tool.coverage.run]
+source = ["app"]
+omit = [
+    "*/tests/*",
+    "*/alembic/*",
+    "*/__pycache__/*",
+    "*/migrations/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "if settings.testing:",
+    "@abstractmethod",
+]
+precision = 2
+show_missing = true
+
+# ==========================================
+# Hatch Build Configuration
+# ==========================================
+[tool.hatch.build]
+include = [
+    "app/**/*.py",
+    "alembic/**/*.py",
+    "pyproject.toml",
+    "README.md",
+    "LICENSE",
+]
+exclude = [
+    "tests/",
+    "docs/",
+    "scripts/",
+    ".docker/",
+    "*.pyc",
+    "__pycache__/",
+]
+
+[tool.hatch.metadata]
+allow-direct-references = true
