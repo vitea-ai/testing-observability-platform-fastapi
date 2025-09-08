@@ -359,6 +359,160 @@ class CSVParser:
                 self.errors.append(f"Validation error: {str(e)}")
         
         return validated
+    
+    async def parse_experiment_results(
+        self,
+        file: UploadFile,
+        validate_only: bool = False
+    ) -> Tuple[List[Dict[str, Any]], List[str], Dict[str, Any]]:
+        """
+        Parse CSV file for experiment results import.
+        
+        Args:
+            file: Uploaded CSV file
+            validate_only: If True, only validate without full parsing
+            
+        Returns:
+            Tuple of (parsed results, warnings, metadata)
+        """
+        # Reset state
+        self.warnings = []
+        self.errors = []
+        self.processed_count = 0
+        
+        # Create temporary file for streaming
+        temp_file_path = None
+        try:
+            # Stream file to temporary location
+            temp_file_path = await self._stream_to_temp_file(file)
+            
+            # Parse experiment results
+            results = await self._parse_experiment_format(temp_file_path, validate_only)
+            
+            # Count total rows
+            total_rows = sum(1 for _ in open(temp_file_path)) - 1  # Subtract header
+            
+            metadata = {
+                'format_type': 'experiment_results',
+                'total_rows': total_rows,
+                'processed_items': len(results),
+                'warnings_count': len(self.warnings)
+            }
+            
+            return results, self.warnings, metadata
+            
+        finally:
+            # Clean up temp file
+            if temp_file_path and Path(temp_file_path).exists():
+                Path(temp_file_path).unlink()
+    
+    async def _parse_experiment_format(
+        self,
+        file_path: str,
+        validate_only: bool = False
+    ) -> List[Dict[str, Any]]:
+        """Parse experiment results format CSV with chunking."""
+        results = []
+        validation_errors = 0
+        
+        # Process in chunks using pandas
+        chunk_iterator = pd.read_csv(file_path, chunksize=self.CHUNK_SIZE)
+        
+        for chunk_num, chunk_df in enumerate(chunk_iterator):
+            logger.info(f"Processing experiment chunk {chunk_num + 1} with {len(chunk_df)} rows")
+            
+            for idx, row in chunk_df.iterrows():
+                self.processed_count += 1
+                
+                try:
+                    result = self._parse_experiment_row(row.to_dict(), self.processed_count)
+                    if result:
+                        results.append(result)
+                except Exception as e:
+                    validation_errors += 1
+                    self.errors.append(f"Row {self.processed_count}: {str(e)}")
+                    
+                    if validation_errors >= self.MAX_ERRORS:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Too many validation errors (>{self.MAX_ERRORS}). First errors: {self.errors[:5]}"
+                        )
+            
+            # Early return if just validating  
+            if validate_only and len(results) >= self.SAMPLE_SIZE:
+                return results[:self.SAMPLE_SIZE]
+        
+        return results
+    
+    def _parse_experiment_row(self, row: Dict[str, Any], row_num: int) -> Optional[Dict[str, Any]]:
+        """Parse a single experiment result row."""
+        # Find input field
+        input_value = (
+            row.get('input') or
+            row.get('input_prompt') or
+            row.get('prompt') or
+            row.get('question') or
+            row.get('text')
+        )
+        
+        if not input_value:
+            self.warnings.append(f"Row {row_num}: No input field found")
+            return None
+        
+        # Extract metadata from meta_* fields
+        metadata = {}
+        for key, value in row.items():
+            if key and key.startswith('meta_'):
+                metadata[key] = value
+        
+        # Parse JSON fields if they exist
+        retrieval_context = []
+        if row.get('retrieval_context'):
+            try:
+                retrieval_context = json.loads(row['retrieval_context'])
+            except:
+                pass
+        
+        tools_called = []
+        if row.get('tools_called'):
+            try:
+                tools_called = json.loads(row['tools_called'])
+            except:
+                pass
+        
+        # Parse context
+        context = []
+        if row.get('context'):
+            try:
+                context = json.loads(row['context']) if isinstance(row['context'], str) else row['context']
+                if not isinstance(context, list):
+                    context = [str(context)]
+            except (json.JSONDecodeError, TypeError):
+                context = [str(row['context'])] if row['context'] else []
+        
+        # Create result item
+        result = {
+            "test_id": row.get('test_case_id') or row.get('test_id') or f"test_{row_num}",
+            "test_case_type": row.get('test_case_type', 'single_turn'),
+            "input": input_value,
+            "expected_output": row.get('expected_output', ''),
+            "actual_output": row.get('actual_output') or row.get('output', ''),
+            "context": context,
+            "retrieval_context": retrieval_context,
+            "tools_called": tools_called,
+            "status": row.get('status', 'completed'),
+            "execution_time": float(row.get('latency_ms', 0)) / 1000 if row.get('latency_ms') else (
+                float(row.get('execution_time', 0)) if row.get('execution_time') else 0
+            ),
+            "token_usage": {
+                "input": int(row.get('token_usage_input', 0)) if row.get('token_usage_input') else 0,
+                "output": int(row.get('token_usage_output', 0)) if row.get('token_usage_output') else 0
+            } if row.get('token_usage_input') or row.get('token_usage_output') else None,
+            "error": row.get('error'),
+            "meta_data": metadata
+        }
+        
+        return result
 
 
 # Singleton instance for reuse
