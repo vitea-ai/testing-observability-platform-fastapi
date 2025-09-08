@@ -32,15 +32,17 @@ dependencies = [
     "structlog>=24.4.0",
     "python-dotenv>=1.0.0",
     "httpx>=0.28.0",
-    "psutil>=6.0.0",  # For system metrics
+    "psutil>=6.0.0", # For system metrics
     # Database dependencies (needed for our platform)
     "sqlalchemy>=2.0.35",
     "alembic>=1.13.0",
-    "psycopg[binary,pool]>=3.2.0",  # PostgreSQL driver
-    "asyncpg>=0.29.0",  # Async PostgreSQL driver
-    "python-jose[cryptography]>=3.3.0",  # For JWT
-    "passlib[bcrypt]>=1.7.4",  # For password hashing
-    "greenlet>=3.0.0",  # Required for SQLAlchemy async
+    "psycopg[binary,pool]>=3.2.0", # PostgreSQL driver
+    "asyncpg>=0.29.0", # Async PostgreSQL driver
+    "python-jose[cryptography]>=3.3.0", # For JWT
+    "passlib[bcrypt]>=1.7.4", # For password hashing
+    "greenlet>=3.0.0", # Required for SQLAlchemy async
+    "aiofiles>=24.1.0",
+    "pandas>=2.3.2",
 ]
 
 # ==========================================
@@ -173,6 +175,8 @@ dev = [
     "mypy>=1.11.0",
     "ipython>=8.27.0",
     "rich>=13.8.0",
+    "pytest-asyncio>=1.1.0",
+    "pytest-cov>=6.2.1",
 ]
 
 # Linting tools
