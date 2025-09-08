@@ -17,6 +17,13 @@ from fastapi.responses import JSONResponse
 from app.core.config import settings
 from app.core.logging import setup_logging, logger
 from app.api.v1.router import api_router
+
+# Observability imports (Tier 3+)
+if settings.deployment_tier in ["staging", "production"]:
+    from app.core.observability_logging import configure_json_logging
+    from app.core.observability_tracing import setup_tracing
+    from app.core.metrics import setup_metrics
+    from app.core.audit_events import AuditEventEmitter
 from app.db.session import init_db, close_db
 from app.middleware.security import SecurityHeadersMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
@@ -125,8 +132,16 @@ def create_application() -> FastAPI:
     Returns:
         FastAPI: Configured application instance
     """
-    # Setup logging
-    setup_logging()
+    # Setup logging based on tier
+    if settings.deployment_tier in ["staging", "production"]:
+        # Use JSON logging with service_name for observability stack
+        configure_json_logging(
+            service_name="testing-observability-platform",
+            log_level=settings.log_level.value
+        )
+    else:
+        # Use standard structured logging for development
+        setup_logging()
     
     # Create app with conditional documentation
     app = FastAPI(
@@ -172,6 +187,36 @@ def create_application() -> FastAPI:
     # Audit logging (Tier 2+)
     if settings.is_feature_enabled("audit_logging"):
         app.add_middleware(AuditLoggingMiddleware)
+    
+    # ==========================================
+    # Observability Setup (Tier 3+)
+    # ==========================================
+    if settings.deployment_tier in ["staging", "production"]:
+        # Setup OpenTelemetry tracing
+        setup_tracing(
+            app,
+            service_name="testing-observability-platform",
+            service_version=settings.version,
+            environment=settings.deployment_tier
+        )
+        
+        # Setup Prometheus metrics
+        setup_metrics(app)
+        
+        # Initialize audit event emitter
+        app.state.audit_emitter = AuditEventEmitter(
+            service_name="testing-observability-platform",
+            service_version=settings.version,
+            environment=settings.deployment_tier
+        )
+        
+        logger.info(
+            "Observability stack initialized",
+            service_name="testing-observability-platform",
+            tracing="enabled",
+            metrics="enabled",
+            audit_events="enabled"
+        )
     
     # Request ID middleware
     @app.middleware("http")
