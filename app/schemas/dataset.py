@@ -2,16 +2,42 @@
 Dataset schemas for request/response validation.
 """
 
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union, Literal
 from datetime import datetime
 from uuid import UUID
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
+
+
+class ConversationTurn(BaseModel):
+    """Schema for a single turn in a conversation."""
+    role: Literal["user", "assistant", "system"] = Field(..., description="Role of the speaker")
+    content: str = Field(..., description="Content of the message")
+    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Optional metadata for the turn")
+
+
+class ConversationInput(BaseModel):
+    """Schema for multi-turn conversation input."""
+    scenario: str = Field(..., description="Description of the conversation scenario")
+    turns: List[ConversationTurn] = Field(..., min_length=1, description="List of conversation turns")
+
+
+class SingleTurnInput(BaseModel):
+    """Schema for single-turn input."""
+    question: Optional[str] = Field(None, description="Question for the test case")
+    prompt: Optional[str] = Field(None, description="Prompt for the test case")
+    text: Optional[str] = Field(None, description="Text input for the test case")
+    
+    class Config:
+        extra = "allow"  # Allow additional fields
 
 
 class DatasetItemBase(BaseModel):
     """Base schema for dataset items (test cases)."""
     # Core input field - flexible to support various formats
-    input: Any = Field(..., description="Test case input (string, object, or conversation)")
+    input: Union[str, SingleTurnInput, ConversationInput, Dict[str, Any]] = Field(
+        ..., 
+        description="Test case input (string, object, or conversation)"
+    )
     
     # Expected outputs
     expected_output: Optional[Any] = Field(None, description="Expected output for single-turn")
@@ -69,3 +95,11 @@ class DatasetListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class CSVUploadResponse(BaseModel):
+    """Response schema for CSV upload."""
+    message: str
+    dataset: DatasetResponse
+    rows_processed: int
+    warnings: Optional[List[str]] = Field(default_factory=list)

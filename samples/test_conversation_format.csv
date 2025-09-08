@@ -1,0 +1,7 @@
+role,content,scenario,expected_outcome,test_id
+user,"Hello, how are you?",greeting,polite_response,test_1
+assistant,"I'm doing well, thank you for asking! How can I help you today?",greeting,,test_1
+user,"Can you help me understand Python decorators?",python_help,helpful_explanation,test_2
+assistant,"Of course! Python decorators are a powerful feature that allow you to modify or enhance functions without changing their code directly.",python_help,,test_2
+user,"Can you give me an example?",python_help,,test_2
+assistant,"Sure! Here's a simple example of a decorator that measures execution time.",python_help,,test_2
