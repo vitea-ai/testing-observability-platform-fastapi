@@ -1,0 +1,68 @@
+conversation_json
+"{
+  ""test_case_type"": ""conversational"",
+  ""turns"": [
+    {
+      ""input"": ""Hi my name is John Smith, born March 15 1985. I am an existing patient"",
+      ""expected_output"": """",
+      ""actual_output"": ""Thank you, Mr. Smith. To verify your identity, I'll need to confirm your last name and date of birth. You've provided those details\u2014John Smith, born March 15, 1985. \n\nWould you like to see your upcoming appointments, or is there something specific you'd like to do today?""
+    },
+    {
+      ""input"": ""I would like to cancel my upcoming appointment, I wont be able to make it"",
+      ""expected_output"": """",
+      ""actual_output"": ""I can help you cancel your upcoming appointment. Could you please specify the date and time of the appointment you'd like to cancel? If you're unsure, I can look up your upcoming appointments for you.""
+    },
+    {
+      ""input"": ""please look them up"",
+      ""expected_output"": """",
+      ""actual_output"": ""You have two upcoming appointments:\n\n1. On Tuesday, August 19, 2025, at 10:00 AM with Dr. Chen for a cardiac stress test and blood pressure check.\n2. Today, Wednesday, August 13, 2025, at 9:00 AM with Dr. Chen for a routine checkup.\n\nWhich appointment would you like to cancel?""
+    },
+    {
+      ""input"": ""please cancel the aug 19th appt"",
+      ""expected_output"": """",
+      ""actual_output"": ""Your appointment on Tuesday, August 19th with Dr. Chen has been successfully canceled. If you need assistance with rescheduling or anything else, just let me know!""
+    },
+    {
+      ""input"": ""list my upcomign appointments"",
+      ""expected_output"": """",
+      ""actual_output"": ""You currently have one upcoming appointment:\n\n- Today, Wednesday, August 13, 2025, at 9:00 AM with Dr. Chen for a routine checkup.\n\nIf there's anything else you'd like to do or need help with, please let me know!""
+    }
+  ],
+  ""scenario"": ""Healthcare scheduling conversation 1"",
+  ""expected_outcome"": """",
+  ""metadata"": {
+    ""conversation_id"": 1,
+    ""timestamp"": ""2025-08-12T17:30:38.609628""
+  }
+}"
+"{
+  ""test_case_type"": ""conversational"",
+  ""turns"": [
+    {
+      ""input"": ""Hi my name is John Smith, born March 15 1985. I am an existing patient"",
+      ""expected_output"": """",
+      ""actual_output"": ""Hello, John! You have an upcoming appointment today at 9:00 AM with Dr. Chen for a routine check. Would you like to do anything with this appointment, such as reschedule or cancel? Or is there something else I can assist you with?""
+    },
+    {
+      ""input"": ""I would like to schedule an appointment with a GP"",
+      ""expected_output"": """",
+      ""actual_output"": ""Great! I can help you find an available appointment with a General Practitioner. Do you have a preferred date range or specific days and times that work best for you?""
+    },
+    {
+      ""input"": ""earliset avaulabke please"",
+      ""expected_output"": """",
+      ""actual_output"": ""The earliest available appointments with a General Practitioner are today, August 13, 2025, starting at 9:00 AM with Dr. Johnson. Would you like to book a specific time slot now? If so, please let me know your preferred time.""
+    },
+    {
+      ""input"": ""let's book for 9AM"",
+      ""expected_output"": """",
+      ""actual_output"": ""Your appointment with Dr. Johnson for a general checkup has been successfully scheduled today at 9:00 AM. The reason for your visit is to discuss your overall health and any concerns you may have. Is there anything else I can assist you with?""
+    }
+  ],
+  ""scenario"": ""Healthcare scheduling conversation 2"",
+  ""expected_outcome"": """",
+  ""metadata"": {
+    ""conversation_id"": 2,
+    ""timestamp"": ""2025-08-12T17:30:38.609790""
+  }
+}"
