@@ -5,8 +5,10 @@ Datasets endpoint for managing test datasets.
 from typing import List, Optional, Dict, Any
 from uuid import UUID
 from datetime import datetime
+import json
+from enum import Enum
 
-from fastapi import APIRouter, HTTPException, status, Depends, Query, Body
+from fastapi import APIRouter, HTTPException, status, Depends, Query, Body, UploadFile, File, Form, BackgroundTasks
 from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,13 +22,18 @@ from app.core.dependencies import (
     get_db
 )
 from app.services.dataset_service import DatasetService
+from app.utils.csv_parser import csv_parser
 from app.schemas.dataset import (
     DatasetItemBase,
     DatasetBase,
     DatasetCreate,
     DatasetUpdate,
     DatasetResponse,
-    DatasetListResponse
+    DatasetListResponse,
+    CSVUploadResponse,
+    ConversationTurn,
+    ConversationInput,
+    SingleTurnInput
 )
 
 router = APIRouter()
@@ -483,3 +490,388 @@ async def duplicate_dataset(
             created_by=current_user.id if current_user else "system"
         )
         return DatasetResponse(**duplicated.to_dict())
+
+
+# ==========================================
+# CSV Upload Status Tracking
+# ==========================================
+class UploadStatus(str, Enum):
+    """Upload status enumeration."""
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+# In-memory tracking for upload status (Tier 1)
+# In production (Tier 3+), this would use Redis or database
+upload_status_storage: Dict[str, Dict[str, Any]] = {}
+
+
+async def process_csv_in_background(
+    upload_id: str,
+    file_content: bytes,
+    filename: str,
+    dataset_params: Dict[str, Any],
+    user_id: Optional[str] = None
+):
+    """
+    Process CSV file in background for large files.
+    """
+    try:
+        # Update status to processing
+        upload_status_storage[upload_id] = {
+            "status": UploadStatus.PROCESSING,
+            "message": "Processing CSV file...",
+            "progress": 0
+        }
+        
+        # Create a fake UploadFile object for the parser
+        import io
+        from fastapi import UploadFile
+        
+        file_like = io.BytesIO(file_content)
+        upload_file = UploadFile(
+            filename=filename,
+            file=file_like
+        )
+        
+        # Parse CSV with production parser
+        items, warnings, metadata = await csv_parser.parse_csv_file(upload_file)
+        
+        # Create dataset
+        dataset_create = DatasetCreate(
+            name=dataset_params['name'],
+            description=dataset_params.get('description', f"Dataset uploaded from {filename}"),
+            type=dataset_params.get('type', 'custom'),
+            data=items,
+            tags=dataset_params.get('tags', []),
+            metadata={
+                **metadata,
+                "source": "csv_upload",
+                "original_filename": filename,
+                "upload_id": upload_id
+            },
+            created_by=user_id or "system"
+        )
+        
+        # Store dataset (simplified for Tier 1)
+        from uuid import uuid4
+        dataset_id = str(uuid4())
+        dataset_dict = dataset_create.model_dump()
+        dataset_dict.update({
+            "id": dataset_id,
+            "status": "active",
+            "record_count": len(items),
+            "created_at": datetime.utcnow(),
+            "updated_at": None,
+            "version": "1.0.0"
+        })
+        
+        datasets_storage[dataset_id] = dataset_dict
+        
+        # Update status to completed
+        upload_status_storage[upload_id] = {
+            "status": UploadStatus.COMPLETED,
+            "message": f"Successfully processed {len(items)} items",
+            "dataset_id": dataset_id,
+            "warnings": warnings,
+            "metadata": metadata
+        }
+        
+    except Exception as e:
+        logger.error(f"Background CSV processing failed: {e}")
+        upload_status_storage[upload_id] = {
+            "status": UploadStatus.FAILED,
+            "message": f"Processing failed: {str(e)}",
+            "error": str(e)
+        }
+
+
+@router.post(
+    "/upload-csv",
+    response_model=CSVUploadResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload CSV dataset",
+    description="Upload a CSV file to create a new dataset with production-ready streaming and validation"
+)
+async def upload_csv_dataset(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(..., description="CSV file to upload"),
+    name: str = Form(..., description="Name for the dataset"),
+    description: Optional[str] = Form(None, description="Description for the dataset"),
+    type: str = Form("custom", description="Dataset type"),
+    tags: Optional[str] = Form(None, description="Comma-separated tags for the dataset"),
+    async_processing: bool = Form(False, description="Process large files in background"),
+    db: Optional[AsyncSession] = Depends(get_db),
+    current_user = Depends(get_current_user) if settings.is_feature_enabled("authentication") else Depends(get_current_user_optional)
+):
+    """
+    Upload a CSV file to create a dataset with production-ready features.
+    
+    **Features:**
+    - Streaming parsing for memory efficiency
+    - Chunked processing (1000 rows at a time)
+    - Automatic format detection
+    - Background processing for large files (>5MB)
+    - Comprehensive validation with early failure
+    
+    **Supported CSV Formats:**
+    
+    1. **Simple Format** (single-turn):
+       ```csv
+       input,expected_output,context,tags
+       "What is 2+2?","4","math","arithmetic,basic"
+       ```
+    
+    2. **Conversation Format** (multi-turn):
+       ```csv
+       role,content,scenario,expected_outcome,test_id
+       user,"Hello","greeting","polite_response","test_1"
+       assistant,"Hi there! How can I help?","greeting","","test_1"
+       ```
+    
+    3. **Flexible Format** (auto-detected):
+       - Supports alternative column names: prompt, question, text
+       - Metadata columns: meta_* fields
+       - JSON arrays in context field
+    
+    **File Limits:**
+    - Maximum file size: 50MB
+    - For files >5MB, use async_processing=true
+    """
+    logger.info(f"Uploading CSV dataset: {name} (async={async_processing})")
+    
+    # Validate file type
+    if not file.filename.lower().endswith('.csv'):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File must be a CSV file"
+        )
+    
+    # Parse tags
+    dataset_tags = []
+    if tags:
+        dataset_tags = [t.strip() for t in tags.split(',') if t.strip()]
+    
+    # Check file size for async decision
+    file_content = await file.read()
+    file_size = len(file_content)
+    
+    # Reset file position
+    file.file.seek(0)
+    
+    # Auto-enable async for large files
+    if file_size > 5 * 1024 * 1024 and not async_processing:
+        logger.info(f"File size {file_size} bytes, auto-enabling async processing")
+        async_processing = True
+    
+    if async_processing:
+        # Process in background for large files
+        from uuid import uuid4
+        upload_id = str(uuid4())
+        
+        # Store initial status
+        upload_status_storage[upload_id] = {
+            "status": UploadStatus.PROCESSING,
+            "message": "Upload received, processing in background...",
+            "filename": file.filename,
+            "file_size": file_size
+        }
+        
+        # Add background task
+        background_tasks.add_task(
+            process_csv_in_background,
+            upload_id=upload_id,
+            file_content=file_content,
+            filename=file.filename,
+            dataset_params={
+                "name": name,
+                "description": description,
+                "type": type,
+                "tags": dataset_tags
+            },
+            user_id=current_user.id if current_user else None
+        )
+        
+        # Return immediate response with upload ID (not using strict schema validation)
+        return {
+            "message": f"Large file ({file_size // 1024}KB) queued for background processing",
+            "dataset": {
+                "id": upload_id,
+                "name": name,
+                "description": description or f"Processing {file.filename}...",
+                "type": type,
+                "status": "processing",
+                "record_count": 0,
+                "created_by": current_user.id if current_user else "system",
+                "created_at": datetime.utcnow(),
+                "updated_at": None,
+                "version": "1.0.0",
+                "data": [{"input": "Processing...", "metadata": {"status": "processing"}}],  # Placeholder to satisfy schema
+                "tags": dataset_tags,
+                "metadata": {"upload_id": upload_id}
+            },
+            "rows_processed": 0,
+            "warnings": [f"Check status at /api/v1/datasets/upload-status/{upload_id}"]
+        }
+    
+    # Process synchronously for smaller files
+    try:
+        # Parse CSV with production parser
+        items, warnings, metadata = await csv_parser.parse_csv_file(file)
+        
+        if not items:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No valid data could be parsed from the CSV file",
+                headers={"X-Warnings": json.dumps(warnings)} if warnings else None
+            )
+        
+        # Create dataset
+        dataset_create = DatasetCreate(
+            name=name,
+            description=description or f"Dataset uploaded from {file.filename}",
+            type=type,
+            data=items,
+            tags=dataset_tags,
+            metadata={
+                **metadata,
+                "source": "csv_upload",
+                "original_filename": file.filename
+            },
+            created_by=current_user.id if current_user else "system"
+        )
+        
+        if settings.deployment_tier == "development":
+            # Tier 1: In-memory implementation
+            from uuid import uuid4
+            
+            dataset_id = str(uuid4())
+            dataset_dict = dataset_create.model_dump()
+            dataset_dict.update({
+                "id": dataset_id,
+                "status": "active",
+                "record_count": len(items),
+                "created_at": datetime.utcnow(),
+                "updated_at": None,
+                "version": "1.0.0"
+            })
+            
+            datasets_storage[dataset_id] = dataset_dict
+            
+            if settings.is_feature_enabled("audit_logging"):
+                await audit_log(
+                    action="dataset.upload_csv",
+                    resource_id=dataset_id,
+                    user=current_user.id if current_user else "anonymous",
+                    details={
+                        "name": name,
+                        "filename": file.filename,
+                        "rows_processed": len(items),
+                        "format": metadata.get('format_type')
+                    }
+                )
+            
+            response_dataset = DatasetResponse(**dataset_dict)
+        else:
+            # Tier 2+: Database implementation
+            service = DatasetService(db)
+            created = await service.create_dataset(
+                dataset_create,
+                created_by=current_user.id if current_user else "system"
+            )
+            response_dataset = DatasetResponse(**created.to_dict())
+        
+        return CSVUploadResponse(
+            message=f"Successfully uploaded dataset from {file.filename}",
+            dataset=response_dataset,
+            rows_processed=len(items),
+            warnings=warnings
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"CSV upload failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to process CSV file: {str(e)}"
+        )
+
+
+@router.get(
+    "/upload-status/{upload_id}",
+    summary="Check CSV upload status",
+    description="Check the status of a background CSV upload"
+)
+async def check_upload_status(
+    upload_id: str,
+    current_user = Depends(get_current_user_optional)
+):
+    """
+    Check the status of a background CSV upload.
+    
+    Returns the current status and any available results.
+    """
+    status = upload_status_storage.get(upload_id)
+    
+    if not status:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Upload {upload_id} not found"
+        )
+    
+    # If completed, include the dataset
+    if status.get("status") == UploadStatus.COMPLETED and status.get("dataset_id"):
+        dataset = datasets_storage.get(status["dataset_id"])
+        if dataset:
+            status["dataset"] = DatasetResponse(**dataset)
+    
+    return status
+
+
+@router.post(
+    "/validate-csv",
+    summary="Validate CSV file",
+    description="Validate a CSV file without creating a dataset"
+)
+async def validate_csv(
+    file: UploadFile = File(..., description="CSV file to validate"),
+    current_user = Depends(get_current_user_optional)
+):
+    """
+    Validate a CSV file without creating a dataset.
+    
+    Useful for checking format and data before actual upload.
+    """
+    logger.info(f"Validating CSV file: {file.filename}")
+    
+    if not file.filename.lower().endswith('.csv'):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File must be a CSV file"
+        )
+    
+    try:
+        # Parse with validation only
+        items, warnings, metadata = await csv_parser.parse_csv_file(file, validate_only=True)
+        
+        return {
+            "valid": len(items) > 0,
+            "format_type": metadata.get('format_type'),
+            "total_rows": metadata.get('total_rows'),
+            "valid_items": len(items),
+            "warnings": warnings,
+            "columns": metadata.get('detected_columns'),
+            "sample": items[:5] if items else []  # Include sample of parsed items
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"CSV validation failed: {e}")
+        return {
+            "valid": False,
+            "error": str(e),
+            "warnings": csv_parser.warnings
+        }
