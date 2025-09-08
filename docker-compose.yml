@@ -20,6 +20,9 @@ services:
       retries: 5
     networks:
       - vitea-shared-network
+    labels:
+      - "logs.collect=true"
+      - "logs.service=testing-observability-postgres"
 
   # FastAPI Application
   api:
@@ -34,6 +37,11 @@ services:
       APP_ENABLE_AUTHENTICATION: ${APP_ENABLE_AUTHENTICATION:-false}
       APP_ENABLE_AUDIT_LOGGING: ${APP_ENABLE_AUDIT_LOGGING:-true}
       APP_ENABLE_HEALTHCARE_MODE: ${APP_ENABLE_HEALTHCARE_MODE:-true}
+      # OpenTelemetry configuration for observability
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-http://host.docker.internal:10318/v1/traces}
+      OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: ${OTEL_EXPORTER_OTLP_LOGS_ENDPOINT:-http://host.docker.internal:10318/v1/logs}
+      OTEL_SERVICE_NAME: testing-observability-platform
+      ENABLE_METRICS: "true"
     ports:
       - "9000:8000"
     depends_on:
@@ -46,6 +54,9 @@ services:
       - vitea-shared-network
     restart: unless-stopped
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    labels:
+      - "logs.collect=true"
+      - "logs.service=testing-observability-platform"
 
   # AI Evaluator Service (Python) - References separate vitea-evaluators repo
   evaluator-service:
@@ -69,6 +80,9 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+    labels:
+      - "logs.collect=true"
+      - "logs.service=vitea-evaluator-service"
 
   # Redis Cache (Tier 3+)
   redis:
@@ -84,6 +98,9 @@ services:
     profiles:
       - staging
       - production
+    labels:
+      - "logs.collect=true"
+      - "logs.service=testing-observability-redis"
 
 volumes:
   postgres_data:
