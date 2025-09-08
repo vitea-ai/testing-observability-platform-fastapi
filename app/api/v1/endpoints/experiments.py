@@ -28,6 +28,7 @@ from app.core.dependencies import (
 )
 from app.services.experiment_service import ExperimentService
 from app.services.evaluation_service import EvaluationService
+from app.utils.csv_parser import csv_parser
 from app.schemas.experiment import (
     ExperimentStatus,
     ExecutionMode,
@@ -51,6 +52,9 @@ router = APIRouter()
 experiments_storage: Dict[str, Dict[str, Any]] = {}
 experiment_results_storage: Dict[str, Dict[str, Any]] = {}
 evaluation_storage: Dict[str, Dict[str, Any]] = {}
+
+# Upload status tracking for experiment CSV imports
+experiment_upload_status: Dict[str, Dict[str, Any]] = {}
 
 
 # ==========================================
@@ -877,161 +881,415 @@ async def cancel_experiment(
         return cancelled
 
 
+async def process_experiment_csv_in_background(
+    upload_id: str,
+    file_content: bytes,
+    filename: str,
+    experiment_params: Dict[str, Any],
+    user_id: Optional[str],
+    db: AsyncSession
+):
+    """
+    Process experiment CSV file in background for large files.
+    """
+    try:
+        # Update status to processing
+        experiment_upload_status[upload_id] = {
+            "status": "processing",
+            "message": "Processing CSV file...",
+            "progress": 0
+        }
+        
+        # Create a fake UploadFile object for the parser
+        file_like = io.BytesIO(file_content)
+        upload_file = UploadFile(
+            filename=filename,
+            file=file_like
+        )
+        
+        # Parse CSV with streaming parser
+        test_results, warnings, metadata = await csv_parser.parse_experiment_results(upload_file)
+        
+        if not test_results:
+            experiment_upload_status[upload_id] = {
+                "status": "failed",
+                "message": "No valid data could be parsed from the CSV file",
+                "error": "Empty results",
+                "warnings": warnings
+            }
+            return
+        
+        # Create experiment
+        from app.schemas.experiment import ExperimentCreate, AgentConfig
+        from uuid import UUID as UUID_type
+        
+        experiment_create = ExperimentCreate(
+            name=experiment_params['name'],
+            description=experiment_params.get('description') or f"Imported from {filename}",
+            dataset_id=UUID_type(experiment_params['dataset_id']) if experiment_params.get('dataset_id') and experiment_params['dataset_id'] != 'null' else None,
+            agent_config=AgentConfig(
+                model="imported",
+                provider="csv",
+                temperature=0.0,
+                max_tokens=1,
+                system_prompt="",
+                custom_fields={
+                    "source": filename,
+                    "upload_id": upload_id,
+                    "rows_processed": len(test_results)
+                }
+            ),
+            execution_mode="batch" if experiment_params.get('execution_mode') == "import" else experiment_params.get('execution_mode', 'batch'),
+            tags=["imported", "async_upload"],
+            metadata={
+                **metadata,
+                "source": "csv_import",
+                "filename": filename,
+                "record_count": len(test_results),
+                "upload_id": upload_id,
+                "warnings": warnings[:10] if warnings else []
+            }
+        )
+        
+        service = ExperimentService(db)
+        experiment = await service.create_experiment(
+            experiment_create,
+            created_by=user_id or "import"
+        )
+        
+        # Add test results
+        from app.models.experiment import TestResult, ExperimentStatus
+        for result_data in test_results:
+            test_result = TestResult(
+                experiment_id=experiment.id,
+                test_id=result_data.get("test_id"),
+                test_case_type=result_data.get("test_case_type", "single_turn"),
+                input=result_data.get("input", {}),
+                expected_output=result_data.get("expected_output"),
+                actual_output=result_data.get("actual_output"),
+                context=result_data.get("context", []),
+                retrieval_context=result_data.get("retrieval_context", []),
+                tools_called=result_data.get("tools_called", []),
+                status=result_data.get("status", "completed"),
+                execution_time=result_data.get("execution_time", 0),
+                error=result_data.get("error"),
+                meta_data=result_data.get("meta_data", {})
+            )
+            db.add(test_result)
+        
+        # Update experiment status
+        experiment.status = ExperimentStatus.COMPLETED
+        experiment.completed_at = datetime.utcnow()
+        experiment.progress = 1.0
+        
+        await db.commit()
+        await db.refresh(experiment)
+        
+        # Update upload status to completed
+        experiment_upload_status[upload_id] = {
+            "status": "completed",
+            "message": f"Successfully processed {len(test_results)} test results",
+            "experiment_id": str(experiment.id),
+            "warnings": warnings,
+            "metadata": metadata
+        }
+        
+        logger.info(f"Background CSV processing completed: {len(test_results)} results imported to experiment {experiment.id}")
+        
+    except Exception as e:
+        logger.error(f"Background CSV processing failed: {e}")
+        experiment_upload_status[upload_id] = {
+            "status": "failed",
+            "message": f"Processing failed: {str(e)}",
+            "error": str(e)
+        }
+
+
 @router.post(
     "/import-csv",
     response_model=ExperimentResponse,
     summary="Import CSV results",
-    description="Import experiment results from a CSV file"
+    description="Import experiment results from a CSV file with streaming support"
 )
 async def import_csv_results(
-    file: UploadFile = File(...),
-    name: str = Form(...),
-    description: Optional[str] = Form(None),
-    dataset_id: Optional[str] = Form(None),
-    execution_mode: str = Form("import"),
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(..., description="CSV file with experiment results"),
+    name: str = Form(..., description="Name for the experiment"),
+    description: Optional[str] = Form(None, description="Description for the experiment"),
+    dataset_id: Optional[str] = Form(None, description="Associated dataset ID"),
+    execution_mode: str = Form("import", description="Execution mode"),
+    async_processing: bool = Form(False, description="Process large files in background"),
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_user_optional)
 ):
     """
-    Import experiment results from a CSV file.
+    Import experiment results from a CSV file with production-ready streaming.
     
-    The CSV should contain columns like:
-    - test_case_id or test_case_index
-    - input, input_prompt, or prompt
-    - expected_output
-    - actual_output or output
-    - context
-    - latency_ms
-    - token_usage_input
-    - token_usage_output
-    - meta_* fields for metadata
+    **Features:**
+    - Streaming parsing for memory efficiency
+    - Chunked processing (1000 rows at a time)
+    - Background processing for large files (>5MB)
+    - Comprehensive validation with detailed warnings
+    
+    **Supported CSV columns:**
+    - test_case_id or test_id: Unique test identifier
+    - input, input_prompt, or prompt: Test input
+    - expected_output: Expected result
+    - actual_output or output: Actual result from model
+    - context: Additional context (JSON array or comma-separated)
+    - latency_ms or execution_time: Performance metrics
+    - token_usage_input/output: Token usage metrics
+    - meta_* fields: Custom metadata
+    - retrieval_context: Retrieved documents (JSON)
+    - tools_called: Tools used (JSON)
     """
-    logger.info(f"Importing CSV results for experiment: {name}")
+    logger.info(f"Importing CSV results for experiment: {name} (async={async_processing})")
     
-    # Read and decode CSV file
-    try:
-        contents = await file.read()
-        decoded = contents.decode('utf-8')
-        csv_reader = csv.DictReader(io.StringIO(decoded))
-        records = list(csv_reader)
-    except Exception as e:
+    # Validate file type
+    if not file.filename.lower().endswith('.csv'):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to parse CSV file: {str(e)}"
+            detail="File must be a CSV file"
         )
     
-    if not records:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="CSV file is empty"
-        )
+    # Check file size for async decision
+    file_content = await file.read()
+    file_size = len(file_content)
     
-    # Transform CSV records to experiment results format
-    test_results = []
-    for index, row in enumerate(records):
-        # Extract metadata from meta_* fields
-        metadata = {}
-        for key, value in row.items():
-            if key and key.startswith('meta_'):
-                metadata[key] = value
+    # Reset file position
+    file.file.seek(0)
+    
+    # Auto-enable async for large files
+    if file_size > 5 * 1024 * 1024 and not async_processing:
+        logger.info(f"File size {file_size} bytes, auto-enabling async processing")
+        async_processing = True
+    
+    if async_processing:
+        # Process in background for large files
+        upload_id = str(uuid.uuid4())
         
-        # Parse JSON fields if they exist
-        retrieval_context = []
-        if row.get('retrieval_context'):
-            try:
-                retrieval_context = json.loads(row['retrieval_context'])
-            except:
-                pass
-        
-        tools_called = []
-        if row.get('tools_called'):
-            try:
-                tools_called = json.loads(row['tools_called'])
-            except:
-                pass
-        
-        # Create result item
-        result = {
-            "test_id": row.get('test_case_id') or row.get('test_id') or f"test_{index}",
-            "test_case_type": row.get('test_case_type', 'single_turn'),
-            "input": row.get('input_prompt') or row.get('input') or row.get('prompt', ''),
-            "expected_output": row.get('expected_output', ''),
-            "actual_output": row.get('actual_output') or row.get('output', ''),
-            "context": [row['context']] if row.get('context') else [],
-            "retrieval_context": retrieval_context,
-            "tools_called": tools_called,
-            "status": "completed",
-            "execution_time": float(row.get('latency_ms', 0)) / 1000 if row.get('latency_ms') else 0,
-            "meta_data": metadata
-        }
-        test_results.append(result)
-    
-    # Store in database
-    service = ExperimentService(db)
-    
-    # Create experiment
-    from app.schemas.experiment import ExperimentCreate, AgentConfig
-    from uuid import UUID as UUID_type
-    
-    experiment_create = ExperimentCreate(
-        name=name,
-        description=description,
-        dataset_id=UUID_type(dataset_id) if dataset_id and dataset_id != 'null' else None,
-        agent_config=AgentConfig(
-            model="imported",
-            provider="csv",
-            temperature=0.0,
-            max_tokens=1,  # Use minimum valid value
-            system_prompt="",
-            custom_fields={"source": file.filename}
-        ),
-        execution_mode="batch" if execution_mode == "import" else execution_mode,
-        tags=["imported"],
-        metadata={
-            "source": "csv_import",
+        # Store initial status
+        experiment_upload_status[upload_id] = {
+            "status": "processing",
+            "message": "Upload received, processing in background...",
             "filename": file.filename,
-            "record_count": len(test_results)
+            "file_size": file_size
         }
-    )
-    
-    experiment = await service.create_experiment(
-        experiment_create,
-        created_by=current_user.id if current_user else "import"
-    )
-    
-    # Add test results directly without the problematic method
-    from app.models.experiment import TestResult, ExperimentStatus
-    for result_data in test_results:
-        test_result = TestResult(
-            experiment_id=experiment.id,
-            test_id=result_data.get("test_id", f"test_{len(test_results)}"),
-            test_case_type=result_data.get("test_case_type", "single_turn"),
-            input=result_data.get("input", {}),
-            expected_output=result_data.get("expected_output"),
-            actual_output=result_data.get("actual_output"),
-            context=result_data.get("context", []),
-            retrieval_context=result_data.get("retrieval_context", []),
-            tools_called=result_data.get("tools_called", []),
-            status=result_data.get("status", "completed"),
-            execution_time=result_data.get("execution_time", 0),
-            error=result_data.get("error"),
-            meta_data=result_data.get("meta_data", {})
+        
+        # Add background task
+        background_tasks.add_task(
+            process_experiment_csv_in_background,
+            upload_id=upload_id,
+            file_content=file_content,
+            filename=file.filename,
+            experiment_params={
+                "name": name,
+                "description": description,
+                "dataset_id": dataset_id,
+                "execution_mode": execution_mode
+            },
+            user_id=current_user.id if current_user else None,
+            db=db
         )
-        db.add(test_result)
+        
+        # Return immediate response with upload ID
+        return {
+            "id": upload_id,
+            "name": name,
+            "description": description or f"Processing {file.filename}...",
+            "status": "processing",
+            "progress": 0.0,
+            "dataset_id": dataset_id,
+            "agent_config": {
+                "model": "imported",
+                "provider": "csv",
+                "temperature": 0.0,
+                "max_tokens": 1,
+                "system_prompt": ""
+            },
+            "execution_mode": execution_mode,
+            "created_at": datetime.utcnow(),
+            "metadata": {
+                "upload_id": upload_id,
+                "processing_message": f"Check status at /api/v1/experiments/import-status/{upload_id}"
+            }
+        }
     
-    # Update experiment status
-    experiment.status = ExperimentStatus.COMPLETED
-    experiment.completed_at = datetime.utcnow()
-    experiment.progress = 1.0
+    # Process synchronously for smaller files
+    try:
+        # Parse CSV with streaming parser
+        test_results, warnings, metadata = await csv_parser.parse_experiment_results(file)
+        
+        if not test_results:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No valid data could be parsed from the CSV file",
+                headers={"X-Warnings": json.dumps(warnings)} if warnings else None
+            )
+        
+        # Store in database
+        service = ExperimentService(db)
+        
+        # Create experiment
+        from app.schemas.experiment import ExperimentCreate, AgentConfig
+        from uuid import UUID as UUID_type
+        
+        experiment_create = ExperimentCreate(
+            name=name,
+            description=description or f"Imported from {file.filename}",
+            dataset_id=UUID_type(dataset_id) if dataset_id and dataset_id != 'null' else None,
+            agent_config=AgentConfig(
+                model="imported",
+                provider="csv",
+                temperature=0.0,
+                max_tokens=1,  # Use minimum valid value
+                system_prompt="",
+                custom_fields={
+                    "source": file.filename,
+                    "rows_processed": len(test_results),
+                    "format": metadata.get('format_type')
+                }
+            ),
+            execution_mode="batch" if execution_mode == "import" else execution_mode,
+            tags=["imported"],
+            metadata={
+                **metadata,
+                "source": "csv_import",
+                "filename": file.filename,
+                "record_count": len(test_results),
+                "warnings": warnings[:10] if warnings else []  # Include first 10 warnings
+            }
+        )
+        
+        experiment = await service.create_experiment(
+            experiment_create,
+            created_by=current_user.id if current_user else "import"
+        )
+        
+        # Add test results directly
+        from app.models.experiment import TestResult, ExperimentStatus
+        for result_data in test_results:
+            test_result = TestResult(
+                experiment_id=experiment.id,
+                test_id=result_data.get("test_id", f"test_{len(test_results)}"),
+                test_case_type=result_data.get("test_case_type", "single_turn"),
+                input=result_data.get("input", {}),
+                expected_output=result_data.get("expected_output"),
+                actual_output=result_data.get("actual_output"),
+                context=result_data.get("context", []),
+                retrieval_context=result_data.get("retrieval_context", []),
+                tools_called=result_data.get("tools_called", []),
+                status=result_data.get("status", "completed"),
+                execution_time=result_data.get("execution_time", 0),
+                error=result_data.get("error"),
+                meta_data=result_data.get("meta_data", {})
+            )
+            db.add(test_result)
+        
+        # Update experiment status
+        experiment.status = ExperimentStatus.COMPLETED
+        experiment.completed_at = datetime.utcnow()
+        experiment.progress = 1.0
+        
+        await db.commit()
+        await db.refresh(experiment)
+        
+        # Convert to response directly from SQLAlchemy model
+        # This avoids issues with JSONB serialization in psycopg3
+        logger.info(f"Successfully imported {len(test_results)} results into experiment {experiment.id}")
+        
+        # Return the SQLAlchemy model directly - FastAPI will handle conversion
+        return experiment
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"CSV import failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to process CSV file: {str(e)}"
+        )
+
+
+@router.get(
+    "/import-status/{upload_id}",
+    summary="Check CSV import status",
+    description="Check the status of a background CSV import"
+)
+async def check_import_status(
+    upload_id: str,
+    current_user = Depends(get_current_user_optional)
+):
+    """
+    Check the status of a background CSV import.
     
-    await db.commit()
-    await db.refresh(experiment)
+    Returns the current status and any available results.
+    """
+    status = experiment_upload_status.get(upload_id)
     
-    experiment_data = experiment.to_dict()
+    if not status:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Upload {upload_id} not found"
+        )
     
-    logger.info(f"Successfully imported {len(test_results)} results into experiment {experiment.id}")
+    # If completed, include the experiment details
+    if status.get("status") == "completed" and status.get("experiment_id"):
+        # In production, would fetch from database
+        # For now, just return the status with experiment_id
+        return {
+            **status,
+            "experiment_url": f"/api/v1/experiments/{status['experiment_id']}"
+        }
     
-    return experiment_data
+    return status
+
+
+@router.post(
+    "/validate-experiment-csv",
+    summary="Validate experiment CSV file",
+    description="Validate an experiment CSV file without importing"
+)
+async def validate_experiment_csv(
+    file: UploadFile = File(..., description="CSV file to validate"),
+    current_user = Depends(get_current_user_optional)
+):
+    """
+    Validate an experiment CSV file without creating an experiment.
+    
+    Useful for checking format and data before actual import.
+    """
+    logger.info(f"Validating experiment CSV file: {file.filename}")
+    
+    if not file.filename.lower().endswith('.csv'):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File must be a CSV file"
+        )
+    
+    try:
+        # Parse with validation only
+        items, warnings, metadata = await csv_parser.parse_experiment_results(file, validate_only=True)
+        
+        return {
+            "valid": len(items) > 0,
+            "format_type": "experiment_results",
+            "total_rows": metadata.get('total_rows'),
+            "valid_items": len(items),
+            "warnings": warnings,
+            "sample": items[:5] if items else [],  # Include sample of parsed items
+            "detected_fields": list(items[0].keys()) if items else []
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Experiment CSV validation failed: {e}")
+        return {
+            "valid": False,
+            "error": str(e),
+            "warnings": csv_parser.warnings
+        }
 
 
 async def run_evaluation_async(

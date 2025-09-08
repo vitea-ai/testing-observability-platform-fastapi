@@ -54,12 +54,16 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
-    configuration = config.get_section(config.config_ini_section)
-    configuration["sqlalchemy.url"] = get_database_url()
+    from sqlalchemy import create_engine
     
-    connectable = engine_from_config(
-        configuration,
-        prefix="sqlalchemy.",
+    # Get database URL and convert to use psycopg (v3) instead of psycopg2
+    db_url = get_database_url()
+    if db_url and db_url.startswith("postgresql://"):
+        # Use psycopg (v3) driver
+        db_url = db_url.replace("postgresql://", "postgresql+psycopg://")
+    
+    connectable = create_engine(
+        db_url,
         poolclass=pool.NullPool,
     )
 
