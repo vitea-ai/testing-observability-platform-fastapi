@@ -128,6 +128,22 @@ AVAILABLE_EVALUATORS = [
             "evaluation_prompt": {"type": "string", "required": True},
             "scoring_criteria": {"type": "object", "required": True}
         }
+    ),
+    EvaluatorInfo(
+        id="intelligent_content_matcher",
+        name="Intelligent Content Matcher",
+        description="LLM-based evaluator that semantically compares expected content against actual output with weighted scoring",
+        category="quality",
+        type="llm_judge",
+        supported_metrics=["content_match_score", "weighted_accuracy", "coverage", "semantic_similarity"],
+        config_schema={
+            "judge_model": {"type": "string", "default": "gpt-4"},
+            "temperature": {"type": "number", "default": 0.3, "minimum": 0.0, "maximum": 2.0},
+            "matching_strategy": {"type": "string", "enum": ["semantic", "exact", "fuzzy"], "default": "semantic"},
+            "weight_mapping": {"type": "object", "default": {"High": 3, "Medium": 2, "Low": 1}},
+            "confidence_threshold": {"type": "number", "default": 0.8, "minimum": 0.0, "maximum": 1.0, "description": "Minimum confidence for positive match"},
+            "include_explanations": {"type": "boolean", "default": True, "description": "Include detailed explanations for each match"}
+        }
     )
 ]
 
