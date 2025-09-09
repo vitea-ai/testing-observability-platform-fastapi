@@ -15,6 +15,7 @@ from app.core.logging import logger
 from app.core.config import settings
 from app.models.experiment import Experiment, ExperimentStatus, ExecutionMode, TestResult
 from app.models.dataset import Dataset
+from app.models.evaluation import Evaluation
 from app.schemas.experiment import ExperimentCreate, ExperimentUpdate
 
 
@@ -191,6 +192,12 @@ class ExperimentService:
         if experiment.status == ExperimentStatus.RUNNING:
             logger.warning(f"Cannot delete running experiment: {experiment_id}")
             return False
+        
+        # Delete related evaluations first (they have foreign key to experiment)
+        evaluations_query = select(Evaluation).where(Evaluation.experiment_id == experiment_id)
+        evaluations = await self.db.execute(evaluations_query)
+        for evaluation in evaluations.scalars():
+            await self.db.delete(evaluation)
         
         # Delete related test results using ORM
         test_results_query = select(TestResult).where(TestResult.experiment_id == experiment_id)
