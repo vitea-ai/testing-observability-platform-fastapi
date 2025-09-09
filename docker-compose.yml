@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   # PostgreSQL Database
-  postgres:
+  eval-postgres-fastapi:
     image: postgres:15-alpine
     container_name: eval-postgres-fastapi
     environment:
@@ -31,9 +31,9 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-development}
       APP_PORT: 8000
-      APP_DATABASE_URL: postgresql://${DB_USER:-dbadmin}:${DB_PASSWORD:-postgres123}@postgres:5432/${DB_NAME:-evaluation_db}
+      APP_DATABASE_URL: postgresql://${DB_USER:-dbadmin}:${DB_PASSWORD:-postgres123}@eval-postgres-fastapi:5432/${DB_NAME:-evaluation_db}
       APP_EVALUATOR_SERVICE_URL: http://evaluator-service:8001
-      APP_DEPLOYMENT_TIER: ${APP_DEPLOYMENT_TIER:-integration}
+      APP_DEPLOYMENT_TIER: integration
       APP_ENABLE_AUTHENTICATION: ${APP_ENABLE_AUTHENTICATION:-false}
       APP_ENABLE_AUDIT_LOGGING: ${APP_ENABLE_AUDIT_LOGGING:-true}
       APP_ENABLE_HEALTHCARE_MODE: ${APP_ENABLE_HEALTHCARE_MODE:-true}
@@ -43,9 +43,9 @@ services:
       OTEL_SERVICE_NAME: testing-observability-platform
       ENABLE_METRICS: "true"
     ports:
-      - "9000:8000"
+      - "8000:8000"
     depends_on:
-      postgres:
+      eval-postgres-fastapi:
         condition: service_healthy
     volumes:
       - ./app:/app/app:ro
@@ -53,7 +53,7 @@ services:
     networks:
       - vitea-shared-network
     restart: unless-stopped
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: /app/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     labels:
       - "logs.collect=true"
       - "logs.service=testing-observability-platform"
