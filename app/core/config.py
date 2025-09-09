@@ -80,7 +80,7 @@ class Settings(BaseSettings):
     api_v1_prefix: str = Field(default="/api/v1")
     allowed_hosts: List[str] = Field(default=["*"])
     cors_origins: List[str] = Field(
-        default=["http://localhost:3000", "http://localhost:3001", "http://localhost:8000"]
+        default=["*"]
     )
     
     @field_validator('allowed_hosts', 'cors_origins', mode='before')
