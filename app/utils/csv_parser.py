@@ -246,6 +246,8 @@ class CSVParser:
                     item = self._parse_single_row(row.to_dict(), self.processed_count)
                     if item:
                         chunk_items.append(item)
+                    else:
+                        logger.debug(f"Row {self.processed_count} returned None from _parse_single_row")
                 except ValidationError as e:
                     validation_errors += 1
                     self.errors.append(f"Row {self.processed_count}: {str(e)}")
@@ -257,51 +259,96 @@ class CSVParser:
                         )
             
             # Batch validate if needed
+            logger.info(f"Chunk {chunk_num + 1}: {len(chunk_items)} items parsed, validate_only={validate_only}")
             if not validate_only and chunk_items:
                 validated_items = self._batch_validate(chunk_items)
+                logger.info(f"Chunk {chunk_num + 1}: {len(validated_items)} items after validation")
                 items.extend(validated_items)
+            elif validate_only:
+                logger.info(f"Skipping batch validation due to validate_only=True")
         
         return items
     
     def _parse_single_row(self, row: Dict[str, Any], row_num: int) -> Optional[DatasetItemBase]:
         """Parse a single row to DatasetItemBase."""
+        try:
+            import pandas as pd
+            # Clean row - convert NaN to None
+            clean_row = {}
+            for k, v in row.items():
+                if pd.isna(v):
+                    clean_row[k] = None
+                else:
+                    clean_row[k] = v
+        except ImportError:
+            # Fallback if pandas is not available
+            clean_row = {}
+            for k, v in row.items():
+                if v is None or (isinstance(v, float) and str(v) == 'nan'):
+                    clean_row[k] = None
+                else:
+                    clean_row[k] = v
+        
         # Find input field
         input_value = (
-            row.get('input') or
-            row.get('prompt') or
-            row.get('question') or
-            row.get('input_prompt') or
-            row.get('text')
+            clean_row.get('input') or
+            clean_row.get('prompt') or
+            clean_row.get('question') or
+            clean_row.get('input_prompt') or
+            clean_row.get('text')
         )
         
-        if not input_value:
+        if not input_value or pd.isna(input_value):
             self.warnings.append(f"Row {row_num}: No input field found")
             return None
         
         # Parse context
         context = []
-        if row.get('context'):
+        if clean_row.get('context'):
             try:
-                context = json.loads(row['context']) if isinstance(row['context'], str) else row['context']
+                context = json.loads(clean_row['context']) if isinstance(clean_row['context'], str) else clean_row['context']
                 if not isinstance(context, list):
                     context = [str(context)]
             except (json.JSONDecodeError, TypeError):
-                context = [c.strip() for c in str(row['context']).split(',') if c.strip()]
+                context = [c.strip() for c in str(clean_row['context']).split(',') if c.strip()]
         
         # Parse tags
         tags = []
-        if row.get('tags'):
-            tags = [t.strip() for t in str(row['tags']).split(',') if t.strip()]
+        if clean_row.get('tags'):
+            tags = [t.strip() for t in str(clean_row['tags']).split(',') if t.strip()]
         
-        # Extract metadata
-        metadata = {k: v for k, v in row.items() if k.startswith('meta_')}
+        # Extract metadata - include conversation_id and other relevant fields
+        metadata = {k: v for k, v in clean_row.items() if k.startswith('meta_') and v is not None}
+        
+        # Add conversation_id to metadata if present
+        if clean_row.get('conversation_id'):
+            metadata['conversation_id'] = clean_row['conversation_id']
+        
+        # Add output field to metadata for multi-conversation format
+        if clean_row.get('output'):
+            metadata['output'] = clean_row['output']
+        
+        # Include any existing metadata field
+        if clean_row.get('metadata'):
+            try:
+                # Try to parse as JSON if it's a string
+                if isinstance(clean_row['metadata'], str):
+                    parsed_meta = json.loads(clean_row['metadata'])
+                    if isinstance(parsed_meta, dict):
+                        metadata.update(parsed_meta)
+                    else:
+                        metadata['raw_metadata'] = clean_row['metadata']
+                else:
+                    metadata['raw_metadata'] = str(clean_row['metadata'])
+            except (json.JSONDecodeError, TypeError):
+                metadata['raw_metadata'] = str(clean_row['metadata'])
         
         return DatasetItemBase(
             input=input_value,
-            expected_output=row.get('expected_output'),
-            expected_outcome=row.get('expected_outcome'),
+            expected_output=clean_row.get('expected_output'),
+            expected_outcome=clean_row.get('expected_outcome'),
             context=context or None,
-            test_id=row.get('test_id'),
+            test_id=clean_row.get('test_id') or clean_row.get('conversation_id'),
             tags=tags or None,
             metadata=metadata or None
         )
@@ -456,7 +503,12 @@ class CSVParser:
         )
         
         if not input_value:
-            self.warnings.append(f"Row {row_num}: No input field found")
+            # Provide helpful error message with available columns
+            available_columns = [col for col in row.keys() if row.get(col)]
+            self.warnings.append(
+                f"Row {row_num}: No input field found. Expected columns with names like: 'input', 'prompt', 'question', or 'text'. "
+                f"Found columns: {', '.join(available_columns[:7])}"
+            )
             return None
         
         # Extract metadata from meta_* fields
@@ -490,13 +542,31 @@ class CSVParser:
             except (json.JSONDecodeError, TypeError):
                 context = [str(row['context'])] if row['context'] else []
         
-        # Create result item
+        # Create result item - intelligently find expected and actual columns
+        # Find any column containing "expected"
+        expected_value = ''
+        for col_name, col_value in row.items():
+            if col_name and 'expected' in col_name.lower() and col_value:
+                expected_value = col_value
+                break
+        
+        # Find any column containing "actual" 
+        actual_value = ''
+        for col_name, col_value in row.items():
+            if col_name and 'actual' in col_name.lower() and col_value:
+                actual_value = col_value
+                break
+        
+        # Fallback to 'output' if no 'actual' column found
+        if not actual_value:
+            actual_value = row.get('output', '')
+        
         result = {
             "test_id": row.get('test_case_id') or row.get('test_id') or f"test_{row_num}",
             "test_case_type": row.get('test_case_type', 'single_turn'),
             "input": input_value,
-            "expected_output": row.get('expected_output', ''),
-            "actual_output": row.get('actual_output') or row.get('output', ''),
+            "expected_output": expected_value,
+            "actual_output": actual_value,
             "context": context,
             "retrieval_context": retrieval_context,
             "tools_called": tools_called,

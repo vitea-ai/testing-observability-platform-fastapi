@@ -1121,10 +1121,16 @@ async def import_csv_results(
         test_results, warnings, metadata = await csv_parser.parse_experiment_results(file)
         
         if not test_results:
+            error_detail = {
+                "error": "CSV Import Failed",
+                "message": "No valid data could be parsed from the CSV file",
+                "details": warnings[:5] if warnings else ["No rows could be processed"],
+                "help": "Expected CSV columns: 'input' (or 'prompt'), 'expected_output', 'actual_output', 'status'. "
+                        "Please ensure your CSV has the correct column headers."
+            }
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No valid data could be parsed from the CSV file",
-                headers={"X-Warnings": json.dumps(warnings)} if warnings else None
+                detail=error_detail
             )
         
         # Store in database
@@ -1134,10 +1140,46 @@ async def import_csv_results(
         from app.schemas.experiment import ExperimentCreate, AgentConfig
         from uuid import UUID as UUID_type
         
+        # Validate dataset_id if provided
+        validated_dataset_id = None
+        if dataset_id and dataset_id != 'null' and dataset_id != '' and dataset_id != 'undefined':
+            try:
+                # Check if it's a valid UUID
+                validated_dataset_id = UUID_type(dataset_id)
+                # Always check if dataset exists to avoid foreign key issues
+                from app.services.dataset_service import DatasetService
+                dataset_service = DatasetService(db)
+                try:
+                    dataset = await dataset_service.get_dataset(validated_dataset_id)
+                    if not dataset:
+                        logger.warning(f"Dataset {validated_dataset_id} not found, will create placeholder dataset")
+                        # Create a placeholder dataset for the import
+                        from app.schemas.dataset import DatasetCreate
+                        placeholder_dataset = DatasetCreate(
+                            name=f"Import Dataset for {name}",
+                            description=f"Auto-created dataset for imported experiment {name}",
+                            type="imported",
+                            schema_version="1.0",
+                            items=[],
+                            metadata={"auto_created": True, "source": "csv_import"}
+                        )
+                        created_dataset = await dataset_service.create_dataset(
+                            placeholder_dataset,
+                            created_by=current_user.id if current_user else "import"
+                        )
+                        validated_dataset_id = created_dataset.id
+                        logger.info(f"Created placeholder dataset {validated_dataset_id} for import")
+                except Exception as e:
+                    logger.warning(f"Could not verify or create dataset: {e}")
+                    validated_dataset_id = None
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Invalid dataset_id format: {dataset_id}")
+                validated_dataset_id = None
+        
         experiment_create = ExperimentCreate(
             name=name,
             description=description or f"Imported from {file.filename}",
-            dataset_id=UUID_type(dataset_id) if dataset_id and dataset_id != 'null' else None,
+            dataset_id=validated_dataset_id,
             agent_config=AgentConfig(
                 model="imported",
                 provider="csv",
@@ -1204,10 +1246,17 @@ async def import_csv_results(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"CSV import failed: {e}")
+        logger.error(f"CSV import failed: {e}", exc_info=True)
+        error_detail = {
+            "error": "CSV Processing Error",
+            "message": "Failed to process the CSV file",
+            "details": str(e),
+            "help": "Please check that your CSV file: 1) Has proper column headers, 2) Contains valid data in each row, "
+                    "3) Uses UTF-8 encoding. Required columns: 'input', 'expected_output' (optional), 'actual_output' (optional)"
+        }
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to process CSV file: {str(e)}"
+            detail=error_detail
         )
 
 
