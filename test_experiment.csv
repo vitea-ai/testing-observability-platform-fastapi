@@ -1,0 +1,4 @@
+test_id,input,expected_output,actual_output,status,execution_time
+test_1,"What is 2+2?","4","4",completed,0.5
+test_2,"What is the capital of France?","Paris","Paris",completed,0.3
+test_3,"What is 10-5?","5","6",failed,0.4

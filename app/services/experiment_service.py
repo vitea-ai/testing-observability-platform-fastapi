@@ -199,6 +199,12 @@ class ExperimentService:
         for evaluation in evaluations.scalars():
             await self.db.delete(evaluation)
         
+        # Delete related evaluations first (they have foreign key to experiment)
+        evaluations_query = select(Evaluation).where(Evaluation.experiment_id == experiment_id)
+        evaluations = await self.db.execute(evaluations_query)
+        for evaluation in evaluations.scalars():
+            await self.db.delete(evaluation)
+        
         # Delete related test results using ORM
         test_results_query = select(TestResult).where(TestResult.experiment_id == experiment_id)
         test_results = await self.db.execute(test_results_query)
