@@ -1,0 +1,4 @@
+conversation_id,input,output,expected_output,metadata
+conv1,"What is the patient's diagnosis?","The patient has diabetes","The patient has Type 2 diabetes","{""category"":""diagnosis""}"
+conv2,"What medications should be prescribed?","Metformin 500mg twice daily","Metformin 500mg twice daily with lifestyle modifications","{""category"":""treatment""}"
+conv3,"What are the symptoms?","Fatigue and increased thirst","Common symptoms include fatigue, increased thirst, and frequent urination","{""category"":""symptoms""}"

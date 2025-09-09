@@ -1,0 +1,4 @@
+test_id,input,expected_output,actual_output,status,execution_time,context,meta_category,meta_notes
+test_001,"What is 2+2?","4","","pending",0.0,"Math problem","arithmetic","Simple addition test"
+test_002,"What is the capital of France?","Paris","","pending",0.0,"Geography question","geography","European capitals"
+test_003,"Translate 'Hello' to Spanish","Hola","","pending",0.0,"Translation task","language","Basic translation"
