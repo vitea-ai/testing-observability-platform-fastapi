@@ -40,7 +40,9 @@ from app.schemas.experiment import (
     ExperimentListResponse,
     ExperimentResultItem,
     ExperimentResults,
-    ExperimentExecuteRequest
+    ExperimentExecuteRequest,
+    AutomatedExecutionRequest,
+    HTTPEndpointConfig
 )
 
 router = APIRouter()
@@ -713,19 +715,19 @@ async def get_experiment_test_results(
 @router.post(
     "/{experiment_id}/evaluate",
     summary="Evaluate experiment",
-    description="Run evaluation on completed experiment"
+    description="Queue evaluation tasks for completed experiment"
 )
 async def evaluate_experiment(
     experiment_id: UUID,
     request: Dict[str, Any],
-    background_tasks: BackgroundTasks,
     db: Optional[AsyncSession] = Depends(get_db),
     current_user = Depends(get_current_user_optional)
 ):
     """
-    Run evaluation on an experiment (Node.js API compatibility).
+    Queue evaluation tasks for an experiment using Celery.
+    Returns immediately with task ID for tracking progress.
     """
-    logger.info(f"Evaluating experiment: {experiment_id}")
+    logger.info(f"Queuing evaluation for experiment: {experiment_id}")
     
     evaluator_ids = request.get("evaluator_ids", [])
     
@@ -735,100 +737,69 @@ async def evaluate_experiment(
             detail="evaluator_ids array is required"
         )
     
+    # Import Celery task here to avoid circular imports
+    from app.workers.tasks import evaluate_experiment_task
+    
     # Get the experiment and test results
-    if settings.deployment_tier == "development":
-        experiment = experiments_storage.get(str(experiment_id))
-        if not experiment:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Experiment {experiment_id} not found"
-            )
-        # Get test results from storage
-        results = experiment_results_storage.get(str(experiment_id), {})
-        test_results = results.get("results", [])
-    else:
-        service = ExperimentService(db)
-        experiment_model = await service.get_experiment(experiment_id)
-        if not experiment_model:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Experiment {experiment_id} not found"
-            )
-        experiment = experiment_model.to_dict()
-        
-        # Get test results from database
-        results = await service.get_experiment_results(experiment_id)
-        test_results = results.get("results", []) if results else []
-    
-    # Create evaluation record
-    if settings.deployment_tier == "development":
-        # Tier 1: Use in-memory storage
-        evaluation_id = str(uuid.uuid4())
-        
-        # Store initial evaluation record in memory
-        evaluation_storage[evaluation_id] = {
-            "evaluation_id": evaluation_id,
-            "experiment_id": str(experiment_id),
-            "experiment_name": experiment.get("name", ""),
-            "agent_name": experiment.get("agent_config", {}).get("name", "Unknown") if isinstance(experiment.get("agent_config"), dict) else "Unknown",
-            "dataset_name": experiment.get("dataset_name", "No Dataset"),
-            "evaluation_type": "comprehensive",
-            "status": "running",
-            "evaluations": [],
-            "summary": {},
-            "created_at": datetime.utcnow().isoformat(),
-            "completed_at": None
-        }
-        
-        # Run evaluation in background (in-memory)
-        background_tasks.add_task(
-            run_evaluation_async,
-            evaluation_id,
-            experiment_id,
-            evaluator_ids,
-            test_results,
-            experiment,
-            None  # No DB session for tier 1
+    service = ExperimentService(db)
+    experiment_model = await service.get_experiment(experiment_id)
+    if not experiment_model:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Experiment {experiment_id} not found"
         )
-    else:
-        # Tier 2+: Save to database
-        eval_service = EvaluationService(db)
-        
-        # Create evaluations for each evaluator
-        created_evaluations = []
-        for evaluator_id in evaluator_ids:
-            evaluation = await eval_service.create_evaluation(
-                experiment_id=experiment_id,
-                evaluator_id=evaluator_id,
-                evaluator_name=evaluator_id.replace("_", " ").title(),
-                evaluator_config={},
-                created_by=current_user.id if current_user else "system"
-            )
-            created_evaluations.append(evaluation)
-        
-        # Use the first evaluation's ID as the main evaluation ID
-        evaluation_id = str(created_evaluations[0].id) if created_evaluations else str(uuid.uuid4())
-        
-        # Run evaluation in background (with DB)
-        background_tasks.add_task(
-            run_evaluation_async,
-            evaluation_id,
-            experiment_id,
-            evaluator_ids,
-            test_results,
-            experiment,
-            created_evaluations  # Pass created evaluation objects
+    experiment = experiment_model.to_dict()
+    
+    # Get test results from database
+    results = await service.get_experiment_results(experiment_id)
+    test_results = results.get("results", []) if results else []
+    
+    if not test_results:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No test results available for evaluation"
         )
     
-    logger.info(f"Created evaluation {evaluation_id} for experiment {experiment_id}")
+    # Create evaluation records in database
+    eval_service = EvaluationService(db)
+    created_evaluations = []
+    evaluation_ids = []
     
-    # Return evaluation info immediately
+    # Queue the evaluation task to Celery
+    task = evaluate_experiment_task.delay(
+        evaluation_ids=[],  # Will be populated after creating DB records
+        experiment_id=str(experiment_id),
+        evaluator_ids=evaluator_ids,
+        test_results=test_results,
+        experiment_name=experiment.get("name", "Unknown")
+    )
+    
+    # Create evaluation records with task ID
+    for evaluator_id in evaluator_ids:
+        evaluation = await eval_service.create_evaluation(
+            experiment_id=experiment_id,
+            evaluator_id=evaluator_id,
+            evaluator_name=evaluator_id.replace("_", " ").title(),
+            evaluator_config={},
+            created_by=current_user.id if current_user else "system",
+            task_id=task.id
+        )
+        created_evaluations.append(evaluation)
+        evaluation_ids.append(str(evaluation.id))
+    
+    # Store evaluation IDs for the task (will be passed as parameter instead)
+    
+    logger.info(f"Queued evaluation task {task.id} for experiment {experiment_id}")
+    
+    # Return task info for tracking
     return {
-        "evaluation_id": evaluation_id,
+        "task_id": task.id,
+        "evaluation_ids": evaluation_ids,
         "experiment_id": str(experiment_id),
-        "status": "running",
-        "message": "Evaluation started successfully",
-        "evaluator_ids": evaluator_ids
+        "status": "queued",
+        "message": "Evaluation queued successfully",
+        "evaluator_ids": evaluator_ids,
+        "websocket_url": f"/ws/evaluations/{task.id}"
     }
 
 
@@ -1294,6 +1265,86 @@ async def check_import_status(
     return status
 
 
+@router.get(
+    "/tasks/{task_id}/status",
+    summary="Get evaluation task status",
+    description="Get the status of a queued or running evaluation task"
+)
+async def get_task_status(
+    task_id: str,
+    current_user = Depends(get_current_user_optional)
+):
+    """
+    Get the status of an evaluation task.
+    """
+    from app.services.queue_service import QueueService
+    
+    queue_service = QueueService()
+    status = await queue_service.get_task_status(task_id)
+    
+    return status
+
+
+@router.delete(
+    "/tasks/{task_id}",
+    summary="Cancel evaluation task",
+    description="Cancel a queued or running evaluation task"
+)
+async def cancel_task(
+    task_id: str,
+    db: Optional[AsyncSession] = Depends(get_db),
+    current_user = Depends(get_current_user_optional)
+):
+    """
+    Cancel an evaluation task.
+    """
+    from app.services.queue_service import QueueService
+    
+    queue_service = QueueService()
+    cancelled = await queue_service.cancel_task(task_id, terminate=True)
+    
+    if not cancelled:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Task could not be cancelled (may be already completed)"
+        )
+    
+    # Update evaluation status in database
+    if db:
+        eval_service = EvaluationService(db)
+        evaluations = await eval_service.get_evaluations_by_task_id(task_id)
+        for evaluation in evaluations:
+            await eval_service.fail_evaluation(
+                evaluation.id,
+                "Task cancelled by user"
+            )
+    
+    return {
+        "task_id": task_id,
+        "status": "cancelled",
+        "message": "Task cancelled successfully"
+    }
+
+
+@router.get(
+    "/tasks/queue/stats",
+    summary="Get queue statistics",
+    description="Get statistics about the evaluation task queue"
+)
+async def get_queue_stats(
+    current_user = Depends(get_current_user_optional)
+):
+    """
+    Get queue statistics including active tasks, workers, etc.
+    """
+    from app.services.queue_service import QueueService
+    
+    queue_service = QueueService()
+    stats = await queue_service.get_queue_stats()
+    
+    return stats
+
+
 @router.post(
     "/validate-experiment-csv",
     summary="Validate experiment CSV file",
@@ -1341,171 +1392,198 @@ async def validate_experiment_csv(
         }
 
 
-async def run_evaluation_async(
-    evaluation_id: str,
+@router.post(
+    "/{experiment_id}/run-automated",
+    response_model=Dict[str, Any],
+    summary="Run automated experiment execution",
+    description="Execute experiment test cases through HTTP endpoint with retry logic"
+)
+async def run_automated_experiment(
     experiment_id: UUID,
-    evaluator_ids: List[str],
-    test_results: List[Dict[str, Any]],
-    experiment: Dict[str, Any],
-    db_evaluations: Optional[List[Any]] = None
+    request: AutomatedExecutionRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_user_optional)
 ):
     """
-    Run evaluation asynchronously by calling the evaluator service.
+    Run automated experiment execution through HTTP endpoint.
+    
+    This endpoint:
+    1. Validates experiment exists and has test cases
+    2. Queues experiment runner task with Celery
+    3. Executes test cases against provided HTTP endpoint
+    4. Stores actual outputs and updates test results
+    5. Optionally triggers evaluations after completion
+    
+    **Features:**
+    - Concurrent request execution with configurable batch size
+    - Automatic retry with exponential backoff
+    - Real-time progress updates via WebSocket
+    - Result storage compatible with evaluation system
     """
-    logger.info(f"Starting async evaluation {evaluation_id} for experiment {experiment_id}")
+    logger.info(f"Starting automated execution for experiment {experiment_id}")
     
-    # Get evaluator service URL
-    evaluator_service_url = settings.evaluator_service_url or "http://localhost:9002"
+    # Get experiment service
+    service = ExperimentService(db)
     
-    # Transform test results to format expected by evaluator service
+    # Validate experiment exists
+    experiment = await service.get_experiment(experiment_id)
+    if not experiment:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Experiment {experiment_id} not found"
+        )
+    
+    # Check experiment status
+    if experiment.status == ExperimentStatus.RUNNING:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Experiment is already running"
+        )
+    
+    # Get test results (input data from CSV)
+    test_results = await service.get_test_results(experiment_id)
+    if not test_results:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No test cases found for this experiment. Please upload CSV data first."
+        )
+    
+    # Prepare test cases for execution
     test_cases = []
     for result in test_results:
         test_case = {
+            "test_id": result.get("test_id", str(uuid.uuid4())),
             "input": result.get("input", ""),
-            "actual_output": result.get("actual_output", ""),
             "expected_output": result.get("expected_output", ""),
             "context": result.get("context", []),
-            "test_case_type": result.get("test_case_type", "single_turn"),
             "metadata": result.get("metadata", {})
         }
-        # Ensure context is a list
-        if isinstance(test_case["context"], str):
-            test_case["context"] = [test_case["context"]] if test_case["context"] else []
-        elif not isinstance(test_case["context"], list):
-            test_case["context"] = []
         test_cases.append(test_case)
     
-    evaluation_results = []
-    missing_evaluators = []
+    # Update experiment status to running
+    await service.update_experiment_status(
+        experiment_id=experiment_id,
+        status=ExperimentStatus.RUNNING,
+        progress=0.0
+    )
     
-    async with httpx.AsyncClient(timeout=300.0) as client:
-        # First, fetch available evaluators
-        try:
-            response = await client.get(f"{evaluator_service_url}/evaluators")
-            available_evaluators = response.json().get("evaluators", [])
-            available_ids = [e["id"] for e in available_evaluators]
-            
-            # Check for missing evaluators
-            missing_evaluators = [e_id for e_id in evaluator_ids if e_id not in available_ids]
-            if missing_evaluators:
-                logger.warning(f"Evaluators not found: {missing_evaluators}. Available: {available_ids}")
-                for missing_id in missing_evaluators:
-                    evaluation_results.append({
-                        "evaluator_id": missing_id,
-                        "metric_name": missing_id,
-                        "status": "failed",
-                        "score": 0,
-                        "details": {
-                            "error": f"Evaluator '{missing_id}' not found in evaluator service"
-                        }
-                    })
-        except Exception as e:
-            logger.error(f"Failed to fetch evaluators: {e}")
-            missing_evaluators = []  # Initialize to empty if fetch fails
-        
-        # Run each evaluator
-        for evaluator_id in evaluator_ids:
-            if evaluator_id in missing_evaluators:
-                continue
-                
-            try:
-                logger.info(f"Running evaluator {evaluator_id}")
-                
-                # Call evaluator service
-                response = await client.post(
-                    f"{evaluator_service_url}/evaluate/{evaluator_id}",
-                    json={"test_cases": test_cases, "config": {}}
-                )
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    evaluation_results.append({
-                        "evaluator_id": evaluator_id,
-                        "metric_name": evaluator_id.replace("_", " ").title(),
-                        "score": round(result.get("overall_score", 0) * 100),
-                        "status": "completed",
-                        "details": result.get("results", [])
-                    })
-                else:
-                    evaluation_results.append({
-                        "evaluator_id": evaluator_id,
-                        "metric_name": evaluator_id,
-                        "score": 0,
-                        "status": "failed",
-                        "details": {"error": f"HTTP {response.status_code}: {response.text}"}
-                    })
-                    
-            except httpx.TimeoutException:
-                logger.error(f"Evaluator {evaluator_id} timed out")
-                evaluation_results.append({
-                    "evaluator_id": evaluator_id,
-                    "metric_name": evaluator_id,
-                    "score": 0,
-                    "status": "failed",
-                    "details": {"error": "Evaluation timed out after 300 seconds"}
-                })
-            except Exception as e:
-                logger.error(f"Evaluator {evaluator_id} failed: {e}")
-                evaluation_results.append({
-                    "evaluator_id": evaluator_id,
-                    "metric_name": evaluator_id,
-                    "score": 0,
-                    "status": "failed",
-                    "details": {"error": str(e)}
-                })
+    # Queue the experiment runner task
+    from app.workers.tasks.experiment_runner_tasks import run_automated_experiment_task
     
-    # Update evaluation record
-    if db_evaluations:
-        # Tier 2+: Update database records
-        from app.core.database import AsyncSessionLocal
-        from app.services.evaluation_service import EvaluationService
+    task = run_automated_experiment_task.delay(
+        experiment_id=str(experiment_id),
+        endpoint_config=request.endpoint_config.model_dump(),
+        test_cases=test_cases,
+        batch_size=request.endpoint_config.batch_size,
+        experiment_name=experiment.name
+    )
+    
+    logger.info(f"Queued automated experiment task {task.id} for experiment {experiment_id}")
+    
+    # If evaluations are requested, store the config for post-execution
+    if request.run_evaluations and request.evaluator_ids:
+        experiment.metadata["pending_evaluations"] = {
+            "evaluator_ids": request.evaluator_ids,
+            "trigger_after_execution": True
+        }
+        await db.commit()
+    
+    return {
+        "message": "Automated experiment execution started",
+        "experiment_id": str(experiment_id),
+        "task_id": task.id,
+        "status": "running",
+        "test_count": len(test_cases),
+        "endpoint_url": request.endpoint_config.url,
+        "batch_size": request.endpoint_config.batch_size,
+        "run_evaluations": request.run_evaluations,
+        "websocket_url": f"/ws/experiments/{task.id}"
+    }
+
+
+@router.get(
+    "/{experiment_id}/execution-status/{task_id}",
+    response_model=Dict[str, Any],
+    summary="Get automated execution status",
+    description="Check the status of an automated experiment execution task"
+)
+async def get_execution_status(
+    experiment_id: UUID,
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_user_optional)
+):
+    """
+    Get the status of an automated experiment execution task.
+    """
+    from celery.result import AsyncResult
+    from app.workers.celery_app import celery_app
+    
+    # Check task status
+    result = AsyncResult(task_id, app=celery_app)
+    
+    response = {
+        "experiment_id": str(experiment_id),
+        "task_id": task_id,
+        "status": result.status,
+        "ready": result.ready(),
+        "successful": result.successful() if result.ready() else None
+    }
+    
+    # Add result data if available
+    if result.ready() and result.successful():
+        task_result = result.result
+        response.update({
+            "summary": task_result.get("summary"),
+            "completed_at": task_result.get("completed_at"),
+            "results_count": len(task_result.get("results", []))
+        })
+    elif result.failed():
+        response["error"] = str(result.info)
+    
+    return response
+
+
+@router.post(
+    "/{experiment_id}/cancel-execution/{task_id}",
+    response_model=Dict[str, Any],
+    summary="Cancel automated execution",
+    description="Cancel a running automated experiment execution"
+)
+async def cancel_execution(
+    experiment_id: UUID,
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_user_optional)
+):
+    """
+    Cancel a running automated experiment execution.
+    """
+    from app.workers.tasks.experiment_runner_tasks import cancel_experiment_execution_task
+    
+    # Cancel the task
+    success = cancel_experiment_execution_task(task_id)
+    
+    if success:
+        # Update experiment status
+        service = ExperimentService(db)
+        await service.update_experiment_status(
+            experiment_id=experiment_id,
+            status=ExperimentStatus.CANCELLED
+        )
         
-        async with AsyncSessionLocal() as db_session:
-            eval_service = EvaluationService(db_session)
-            
-            for i, evaluator_id in enumerate(evaluator_ids):
-                if i < len(db_evaluations):
-                    db_eval = db_evaluations[i]
-                    # Find the corresponding result
-                    result = next((r for r in evaluation_results if r["evaluator_id"] == evaluator_id), None)
-                    
-                    if result:
-                        # Update the evaluation in database
-                        await eval_service.complete_evaluation(
-                            evaluation_id=db_eval.id,
-                            results={
-                                "details": result.get("details", []),
-                                "summary": result
-                            },
-                            score=result.get("score", 0) / 100.0,  # Convert to 0-1 scale
-                            total_tests=len(test_results),
-                            passed_tests=sum(1 for d in result.get("details", []) if d.get("passed", False)),
-                            failed_tests=sum(1 for d in result.get("details", []) if not d.get("passed", True))
-                        )
-                    else:
-                        # Mark as failed if no result
-                        await eval_service.fail_evaluation(
-                            evaluation_id=db_eval.id,
-                            error_message="Evaluation failed to produce results"
-                        )
+        return {
+            "message": "Experiment execution cancelled",
+            "experiment_id": str(experiment_id),
+            "task_id": task_id,
+            "status": "cancelled"
+        }
     else:
-        # Tier 1: Update in-memory storage
-        if evaluation_id in evaluation_storage:
-            evaluation_storage[evaluation_id]["status"] = "completed"
-            evaluation_storage[evaluation_id]["evaluations"] = evaluation_results
-            evaluation_storage[evaluation_id]["completed_at"] = datetime.utcnow().isoformat()
-            
-            # Calculate summary
-            total = len(evaluation_results)
-            passed = sum(1 for r in evaluation_results if r["status"] == "completed")
-            failed = sum(1 for r in evaluation_results if r["status"] == "failed")
-            avg_score = sum(r["score"] for r in evaluation_results if r["status"] == "completed") / max(passed, 1)
-            
-            evaluation_storage[evaluation_id]["summary"] = {
-                "total_evaluated": total,
-                "passed": passed,
-                "failed": failed,
-                "average_score": avg_score
-            }
-    
-    logger.info(f"Completed evaluation {evaluation_id} with {len(evaluation_results)} results")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to cancel experiment execution"
+        )
+
+
+# Note: The old run_evaluation_async function has been replaced with Celery tasks
+# See app/workers/tasks/evaluation_tasks.py for the new implementation

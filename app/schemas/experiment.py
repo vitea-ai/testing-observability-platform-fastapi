@@ -114,3 +114,20 @@ class ExperimentExecuteRequest(BaseModel):
     batch_size: Optional[int] = Field(None, ge=1, le=100, description="Batch size for processing")
     timeout: Optional[int] = Field(None, ge=1, description="Timeout in seconds")
     evaluator_ids: Optional[List[str]] = Field(default_factory=list, description="Evaluators to run")
+
+
+class HTTPEndpointConfig(BaseModel):
+    """Configuration for HTTP endpoint automation."""
+    url: str = Field(..., description="HTTP endpoint URL to call")
+    headers: Dict[str, str] = Field(default_factory=dict, description="HTTP headers including auth tokens")
+    timeout: int = Field(default=30, ge=1, le=300, description="Request timeout in seconds")
+    retry_attempts: int = Field(default=3, ge=1, le=10, description="Number of retry attempts")
+    retry_delay: float = Field(default=1.0, ge=0.1, le=60, description="Initial retry delay in seconds")
+    batch_size: int = Field(default=10, ge=1, le=50, description="Number of concurrent requests")
+
+
+class AutomatedExecutionRequest(BaseModel):
+    """Request to run automated experiment execution."""
+    endpoint_config: HTTPEndpointConfig
+    run_evaluations: bool = Field(default=False, description="Run evaluations after execution")
+    evaluator_ids: Optional[List[str]] = Field(default_factory=list, description="Evaluators to run if enabled")
