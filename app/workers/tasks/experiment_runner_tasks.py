@@ -128,6 +128,8 @@ async def _run_experiment_async(
     if not endpoint_url:
         raise ValueError("Endpoint URL is required for automated execution")
     
+    logger.info(f"Using endpoint URL: {endpoint_url} with timeout: {timeout}s")
+    
     # Send initial WebSocket update
     await _send_websocket_update(
         task.request.id,
@@ -135,7 +137,12 @@ async def _run_experiment_async(
         {"message": f"Starting automated execution with {len(test_cases)} test cases", "progress": 0}
     )
     
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    # Create httpx client with explicit configuration for Docker networking
+    async with httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=True,
+        verify=False  # Disable SSL verification for internal services
+    ) as client:
         # Process test cases in batches
         for batch_start in range(0, len(test_cases), batch_size):
             batch_end = min(batch_start + batch_size, len(test_cases))
@@ -244,6 +251,49 @@ async def _run_experiment_async(
     }
 
 
+def _extract_guardrail_output(response_data: Dict[str, Any]) -> str:
+    """
+    Extract detected PHI types from guardrail response.
+    """
+    action = response_data.get("action", "no_action")
+    
+    if action == "modify" and "modifications" in response_data:
+        # Extract unique PHI types detected
+        detected_types = set()
+        for mod in response_data["modifications"]:
+            # Use the 'type' field which contains the PHI type
+            if "type" in mod:
+                detected_types.add(mod["type"])
+                
+        # Return comma-separated list of detected types
+        if detected_types:
+            return ", ".join(sorted(detected_types))
+    
+    return "None"
+
+
+def _determine_test_status(actual_output: str, expected_output: str) -> str:
+    """
+    Determine if test passed by comparing actual and expected outputs.
+    Handles both exact matches and subset matching for PHI types.
+    """
+    # Handle None/empty cases
+    if expected_output in ["None", "", None]:
+        return "passed" if actual_output in ["None", "", None, "no_action"] else "failed"
+    
+    # For PHI detection, check if detected types match expected
+    if "," in expected_output or "," in actual_output:
+        # Parse as comma-separated lists
+        expected_types = set(t.strip().lower() for t in expected_output.split(",") if t.strip())
+        actual_types = set(t.strip().lower() for t in actual_output.split(",") if t.strip())
+        
+        # Check if actual contains all expected types (may have additional ones)
+        return "passed" if expected_types.issubset(actual_types) else "failed"
+    
+    # Exact match
+    return "passed" if actual_output == expected_output else "failed"
+
+
 async def _execute_single_test(
     client: httpx.AsyncClient,
     endpoint_url: str,
@@ -260,11 +310,27 @@ async def _execute_single_test(
     expected_output = test_case.get("expected_output", "")
     
     # Prepare request payload
-    payload = {
-        "input": input_data,
-        "context": test_case.get("context", []),
-        "metadata": test_case.get("metadata", {})
-    }
+    # Check if endpoint is a guardrail service (ends with /check)
+    if endpoint_url.endswith("/check"):
+        # Guardrail format - use 'content' field
+        # Ensure context is a dict, not an array
+        context = test_case.get("context", {})
+        if isinstance(context, list):
+            context = {}  # Convert empty list to empty dict for guardrails
+        
+        payload = {
+            "content": input_data,
+            "content_type": "application/json" if input_data.startswith("{") else "text/plain",
+            "context": context,
+            "metadata": test_case.get("metadata", {})
+        }
+    else:
+        # Standard format
+        payload = {
+            "input": input_data,
+            "context": test_case.get("context", []),
+            "metadata": test_case.get("metadata", {})
+        }
     
     last_error = None
     for attempt in range(retry_attempts):
@@ -283,10 +349,17 @@ async def _execute_single_test(
             
             if response.status_code == 200:
                 response_data = response.json()
-                actual_output = response_data.get("output", response_data.get("result", ""))
+                
+                # Extract actual output based on response format
+                if endpoint_url.endswith("/check"):
+                    # Guardrail response - extract detected PHI types
+                    actual_output = _extract_guardrail_output(response_data)
+                else:
+                    # Standard response
+                    actual_output = response_data.get("output", response_data.get("result", ""))
                 
                 # Determine test status
-                status = "passed" if actual_output == expected_output else "failed"
+                status = _determine_test_status(actual_output, expected_output)
                 
                 return {
                     "test_id": test_id,
@@ -309,8 +382,10 @@ async def _execute_single_test(
             last_error = f"Request timeout after {client.timeout.total} seconds"
         except httpx.RequestError as e:
             last_error = f"Request error: {str(e)}"
+            logger.warning(f"Request error for {endpoint_url}: {str(e)}, attempt {attempt + 1}")
         except Exception as e:
             last_error = f"Unexpected error: {str(e)}"
+            logger.error(f"Unexpected error for {endpoint_url}: {str(e)}, attempt {attempt + 1}")
         
         # Wait before retry (except for last attempt)
         if attempt < retry_attempts - 1:
