@@ -41,6 +41,8 @@ celery_app.conf.update(
 # Task routing configuration
 celery_app.conf.task_routes = {
     "app.workers.tasks.evaluation_tasks.*": {"queue": "evaluations"},
+    "app.workers.tasks.experiment_runner_tasks.*": {"queue": "default"},
+    "run_automated_experiment": {"queue": "default"},
 }
 
 # Default queue configurations

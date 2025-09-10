@@ -117,6 +117,7 @@ services:
     container_name: eval-celery-worker
     environment:
       APP_ENV: ${APP_ENV:-integration}
+      APP_DATABASE_URL: postgresql://${DB_USER:-dbadmin}:${DB_PASSWORD:-postgres123}@eval-postgres-fastapi:5432/${DB_NAME:-evaluation_db}
       DATABASE_URL: postgresql://${DB_USER:-dbadmin}:${DB_PASSWORD:-postgres123}@eval-postgres-fastapi:5432/${DB_NAME:-evaluation_db}
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
@@ -132,7 +133,7 @@ services:
     networks:
       - vitea-shared-network
     restart: unless-stopped
-    command: /app/.venv/bin/celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+    command: sh -c "cd /app && /app/.venv/bin/celery -A app.workers.celery_app worker --loglevel=info --concurrency=2"
     labels:
       - "logs.collect=true"
       - "logs.service=testing-observability-celery"
