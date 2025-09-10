@@ -4,6 +4,7 @@ Experiment service layer for database operations.
 
 from typing import List, Optional, Dict, Any
 from uuid import UUID
+import uuid
 from datetime import datetime
 from sqlalchemy import select, and_, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -378,4 +379,101 @@ class ExperimentService:
         
         await self.db.commit()
         logger.info(f"Added {len(test_results)} test results to experiment {experiment_id}")
+        return True
+    
+    async def get_test_results(self, experiment_id: UUID) -> List[Dict[str, Any]]:
+        """
+        Get test results for an experiment (raw test cases).
+        """
+        query = select(TestResult).where(TestResult.experiment_id == experiment_id)
+        result = await self.db.execute(query)
+        test_results = result.scalars().all()
+        
+        return [
+            {
+                "test_id": r.test_id,
+                "input": r.input,
+                "expected_output": r.expected_output,
+                "actual_output": r.actual_output,
+                "context": r.context,
+                "status": r.status,
+                "execution_time": r.execution_time,
+                "error": r.error,
+                "metadata": r.meta_data if r.meta_data else {}
+            }
+            for r in test_results
+        ]
+    
+    async def update_experiment_status(
+        self,
+        experiment_id: UUID,
+        status: ExperimentStatus,
+        progress: Optional[float] = None,
+        error_message: Optional[str] = None
+    ) -> bool:
+        """
+        Update experiment status and progress.
+        """
+        query = select(Experiment).where(Experiment.id == experiment_id)
+        result = await self.db.execute(query)
+        experiment = result.scalar_one_or_none()
+        
+        if not experiment:
+            raise ValueError(f"Experiment {experiment_id} not found")
+        
+        experiment.status = status
+        
+        if progress is not None:
+            experiment.progress = progress
+        
+        if status == ExperimentStatus.RUNNING and not experiment.started_at:
+            experiment.started_at = datetime.utcnow()
+        
+        if status in [ExperimentStatus.COMPLETED, ExperimentStatus.FAILED, ExperimentStatus.CANCELLED]:
+            experiment.completed_at = datetime.utcnow()
+            if status == ExperimentStatus.COMPLETED:
+                experiment.progress = 100.0
+        
+        if error_message and status == ExperimentStatus.FAILED:
+            if not experiment.metadata:
+                experiment.metadata = {}
+            experiment.metadata["error"] = error_message
+        
+        await self.db.commit()
+        logger.info(f"Updated experiment {experiment_id} status to {status}")
+        return True
+    
+    async def store_test_results(
+        self,
+        experiment_id: UUID,
+        results: List[Dict[str, Any]]
+    ) -> bool:
+        """
+        Store or update test results from automated execution.
+        """
+        # Clear existing test results
+        delete_query = select(TestResult).where(TestResult.experiment_id == experiment_id)
+        existing_results = await self.db.execute(delete_query)
+        for result in existing_results.scalars():
+            await self.db.delete(result)
+        
+        # Add new test results
+        for result_data in results:
+            test_result = TestResult(
+                experiment_id=experiment_id,
+                test_id=result_data.get("test_id", str(uuid.uuid4())),
+                test_case_type="single_turn",
+                input=result_data.get("input", ""),
+                expected_output=result_data.get("expected_output", ""),
+                actual_output=result_data.get("actual_output", ""),
+                context=result_data.get("context", []),
+                status=result_data.get("status", "completed"),
+                execution_time=result_data.get("execution_time", 0),
+                error=result_data.get("error"),
+                meta_data=result_data.get("metadata", {})
+            )
+            self.db.add(test_result)
+        
+        await self.db.commit()
+        logger.info(f"Stored {len(results)} test results for experiment {experiment_id}")
         return True

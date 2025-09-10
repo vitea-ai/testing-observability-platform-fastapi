@@ -27,7 +27,8 @@ class EvaluationService:
         evaluator_id: str,
         evaluator_name: str,
         evaluator_config: Optional[Dict[str, Any]] = None,
-        created_by: Optional[str] = None
+        created_by: Optional[str] = None,
+        task_id: Optional[str] = None
     ) -> Evaluation:
         """Create a new evaluation."""
         evaluation = Evaluation(
@@ -35,7 +36,8 @@ class EvaluationService:
             evaluator_id=evaluator_id,
             evaluator_name=evaluator_name,
             evaluator_config=evaluator_config or {},
-            status="running",
+            task_id=task_id,
+            status="queued" if task_id else "running",
             meta_data={"created_by": created_by} if created_by else {}
         )
         
@@ -76,6 +78,41 @@ class EvaluationService:
         
         logger.debug(f"Found {len(evaluations)} evaluations for experiment {experiment_id}")
         return evaluations
+    
+    async def get_evaluations_by_task_id(
+        self,
+        task_id: str
+    ) -> List[Evaluation]:
+        """Get all evaluations associated with a Celery task ID."""
+        query = select(Evaluation).where(
+            Evaluation.task_id == task_id
+        ).options(selectinload(Evaluation.experiment))
+        
+        result = await self.db.execute(query)
+        evaluations = result.scalars().all()
+        
+        logger.debug(f"Found {len(evaluations)} evaluations for task {task_id}")
+        return evaluations
+    
+    async def update_task_id(
+        self,
+        evaluation_id: UUID,
+        task_id: str
+    ) -> Optional[Evaluation]:
+        """Update the task ID for an evaluation."""
+        evaluation = await self.get_evaluation(evaluation_id)
+        if not evaluation:
+            return None
+        
+        evaluation.task_id = task_id
+        evaluation.status = "queued"
+        evaluation.updated_at = datetime.utcnow()
+        
+        await self.db.commit()
+        await self.db.refresh(evaluation)
+        
+        logger.info(f"Updated evaluation {evaluation_id} with task ID {task_id}")
+        return evaluation
     
     async def get_all_evaluations(
         self,
