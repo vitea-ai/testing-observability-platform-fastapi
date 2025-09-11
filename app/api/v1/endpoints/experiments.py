@@ -53,7 +53,6 @@ router = APIRouter()
 # ==========================================
 experiments_storage: Dict[str, Dict[str, Any]] = {}
 experiment_results_storage: Dict[str, Dict[str, Any]] = {}
-evaluation_storage: Dict[str, Dict[str, Any]] = {}
 
 # Upload status tracking for experiment CSV imports
 experiment_upload_status: Dict[str, Dict[str, Any]] = {}
@@ -179,166 +178,82 @@ async def create_experiment(
             experiment,
             created_by=current_user.id if current_user else "system"
         )
+        
+        # Auto-trigger experiment if it has an endpoint URL
+        endpoint_url = None
+        if experiment.agent_config and experiment.agent_config.parameters:
+            endpoint_url = experiment.agent_config.parameters.get("endpoint_url")
+        if not endpoint_url and experiment.metadata:
+            endpoint_url = experiment.metadata.get("endpoint_url")
+        
+        if endpoint_url and experiment.dataset_id:
+            logger.info(f"Auto-triggering experiment {created.id} with endpoint {endpoint_url}")
+            
+            # Load dataset to get test cases
+            from app.services.dataset_service import DatasetService
+            dataset_service = DatasetService(db)
+            dataset = await dataset_service.get_dataset(experiment.dataset_id)
+            
+            if dataset and dataset.data:
+                # Transform localhost URLs to use Docker container names
+                if "localhost:8003" in endpoint_url:
+                    endpoint_url = endpoint_url.replace("localhost:8003", "pilot-api:8000")
+                elif "localhost:8000" in endpoint_url and "/api/v1/guardrails" in endpoint_url:
+                    endpoint_url = endpoint_url.replace("localhost:8000", "pilot-api:8000")
+                
+                # Prepare test cases from dataset
+                test_cases = []
+                for idx, item in enumerate(dataset.data[:100], 1):  # Limit to 100 test cases
+                    test_case = {
+                        "test_id": f"test_{idx}",
+                        "input": item.get("input", ""),
+                        "expected_output": item.get("expected_output", ""),
+                        "context": item.get("context", []),
+                        "metadata": item.get("metadata", {})
+                    }
+                    test_cases.append(test_case)
+                
+                # Queue the experiment runner task
+                try:
+                    from app.workers.tasks.experiment_runner_tasks import run_automated_experiment_task
+                    
+                    endpoint_config = {
+                        "url": endpoint_url,
+                        "headers": {},
+                        "timeout": 30,
+                        "retry_attempts": 2,
+                        "retry_delay": 1,
+                        "batch_size": 10
+                    }
+                    
+                    task = run_automated_experiment_task.delay(
+                        experiment_id=str(created.id),
+                        endpoint_config=endpoint_config,
+                        test_cases=test_cases,
+                        batch_size=10,
+                        experiment_name=created.name
+                    )
+                    
+                    logger.info(f"Queued automated experiment task {task.id} for experiment {created.id}")
+                except Exception as e:
+                    logger.error(f"Failed to queue experiment task: {e}")
+                    logger.error(f"Error type: {type(e).__name__}")
+                    import traceback
+                    logger.error(f"Traceback: {traceback.format_exc()}")
+                
+                # Update experiment status to running
+                await service.update_experiment_status(
+                    experiment_id=created.id,
+                    status=ExperimentStatus.RUNNING,
+                    progress=0.0
+                )
+                
+                # Refresh the experiment to get the updated status
+                await db.refresh(created)
+        
         return created
 
 
-@router.get(
-    "/all-evaluations/",
-    summary="Get all evaluations",
-    description="Get all evaluations for evaluation results page"
-)
-async def get_all_evaluations(
-    page: int = Query(1, ge=1, description="Page number"),
-    limit: int = Query(50, ge=1, le=100, description="Results per page"),
-    db: Optional[AsyncSession] = Depends(get_db),
-    current_user = Depends(get_current_user_optional)
-):
-    """
-    Get all evaluations (Node.js API compatibility).
-    """
-    logger.info(f"Getting all evaluations - page: {page}, limit: {limit}")
-    
-    if settings.deployment_tier == "development":
-        # Tier 1: Return in-memory evaluations
-        all_evaluations = list(evaluation_storage.values())
-        start = (page - 1) * limit
-        end = start + limit
-        return {
-            "evaluations": all_evaluations[start:end],
-            "total": len(all_evaluations),
-            "page": page,
-            "limit": limit
-        }
-    else:
-        # Tier 2+: Fetch from database
-        service = EvaluationService(db)
-        result = await service.get_all_evaluations(page=page, limit=limit)
-        
-        # Format evaluations for API response
-        formatted_evaluations = []
-        for eval in result["evaluations"]:
-            formatted = await service.get_evaluation_for_api_response(eval.id)
-            if formatted:
-                formatted_evaluations.append(formatted)
-        
-        return {
-            "evaluations": formatted_evaluations,
-            "total": result["total"],
-            "page": result["page"],
-            "limit": result["limit"]
-        }
-
-
-@router.get(
-    "/evaluations/{evaluation_id}",
-    summary="Get evaluation by ID",
-    description="Get a specific evaluation by its ID"
-)
-async def get_evaluation_by_id(
-    evaluation_id: str,
-    db: Optional[AsyncSession] = Depends(get_db),
-    current_user = Depends(get_current_user_optional)
-):
-    """
-    Get a specific evaluation by ID (Node.js API compatibility).
-    """
-    logger.info(f"Getting evaluation: {evaluation_id}")
-    
-    if settings.deployment_tier == "development":
-        # Tier 1: Check in-memory storage
-        if evaluation_id in evaluation_storage:
-            return evaluation_storage[evaluation_id]
-        
-        # Return "running" status for new evaluations
-        return {
-            "evaluation_id": evaluation_id,
-            "experiment_id": "c37be40f-ec72-4861-a0e9-df7275e0735a",
-            "experiment_name": "Test Experiment - Evaluation",
-            "agent_name": "GPT-4",
-            "dataset_name": "Test Dataset",
-            "evaluation_type": "comprehensive",
-            "status": "running",
-            "evaluations": [],
-            "summary": {},
-            "created_at": datetime.utcnow().isoformat(),
-            "completed_at": None
-        }
-    else:
-        # Tier 2+: Fetch from database
-        try:
-            eval_uuid = UUID(evaluation_id)
-            service = EvaluationService(db)
-            formatted = await service.get_evaluation_for_api_response(eval_uuid)
-            
-            if formatted:
-                return formatted
-            
-            # Return running status if not found (might still be processing)
-            return {
-                "evaluation_id": evaluation_id,
-                "status": "running",
-                "evaluations": [],
-                "summary": {},
-                "created_at": datetime.utcnow().isoformat(),
-                "completed_at": None
-            }
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid evaluation ID format"
-            )
-
-
-@router.delete(
-    "/all-evaluations/{evaluation_id}",
-    summary="Delete evaluation",
-    description="Delete an evaluation by its ID"
-)
-async def delete_evaluation(
-    evaluation_id: str,
-    db: Optional[AsyncSession] = Depends(get_db),
-    current_user = Depends(get_current_user_optional)
-):
-    """
-    Delete an evaluation (Node.js API compatibility).
-    """
-    logger.info(f"Deleting evaluation: {evaluation_id}")
-    
-    if settings.deployment_tier == "development":
-        # Tier 1: Remove from in-memory storage
-        if evaluation_id in evaluation_storage:
-            del evaluation_storage[evaluation_id]
-            return {
-                "message": "Evaluation deleted successfully",
-                "evaluation_id": evaluation_id
-            }
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Evaluation {evaluation_id} not found"
-            )
-    else:
-        # Tier 2+: Delete from database
-        try:
-            eval_uuid = UUID(evaluation_id)
-            service = EvaluationService(db)
-            deleted = await service.delete_evaluation(eval_uuid)
-            
-            if deleted:
-                return {
-                    "message": "Evaluation deleted successfully",
-                    "evaluation_id": evaluation_id
-                }
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Evaluation {evaluation_id} not found"
-                )
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid evaluation ID format"
-            )
 
 
 @router.get(
@@ -760,21 +675,12 @@ async def evaluate_experiment(
             detail="No test results available for evaluation"
         )
     
-    # Create evaluation records in database
+    # Create evaluation records in database FIRST
     eval_service = EvaluationService(db)
     created_evaluations = []
     evaluation_ids = []
     
-    # Queue the evaluation task to Celery
-    task = evaluate_experiment_task.delay(
-        evaluation_ids=[],  # Will be populated after creating DB records
-        experiment_id=str(experiment_id),
-        evaluator_ids=evaluator_ids,
-        test_results=test_results,
-        experiment_name=experiment.get("name", "Unknown")
-    )
-    
-    # Create evaluation records with task ID
+    # Create evaluation records without task ID initially
     for evaluator_id in evaluator_ids:
         evaluation = await eval_service.create_evaluation(
             experiment_id=experiment_id,
@@ -782,12 +688,23 @@ async def evaluate_experiment(
             evaluator_name=evaluator_id.replace("_", " ").title(),
             evaluator_config={},
             created_by=current_user.id if current_user else "system",
-            task_id=task.id
+            task_id=None  # Don't set task_id yet
         )
         created_evaluations.append(evaluation)
         evaluation_ids.append(str(evaluation.id))
     
-    # Store evaluation IDs for the task (will be passed as parameter instead)
+    # Now queue the evaluation task to Celery with the evaluation IDs
+    task = evaluate_experiment_task.delay(
+        evaluation_ids=evaluation_ids,  # Pass the actual evaluation IDs
+        experiment_id=str(experiment_id),
+        evaluator_ids=evaluator_ids,
+        test_results=test_results,
+        experiment_name=experiment.get("name", "Unknown")
+    )
+    
+    # Update evaluations with the task ID
+    for evaluation in created_evaluations:
+        await eval_service.update_task_id(evaluation.id, task.id)
     
     logger.info(f"Queued evaluation task {task.id} for experiment {experiment_id}")
     

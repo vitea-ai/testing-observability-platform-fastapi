@@ -5,7 +5,7 @@ Celery tasks for evaluation processing.
 import asyncio
 import httpx
 import json
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from uuid import UUID
 from datetime import datetime
 from celery import Task
@@ -13,15 +13,11 @@ from celery.utils.log import get_task_logger
 
 from app.workers.celery_app import celery_app
 from app.core.config import settings
-from app.core.websocket_manager import WebSocketManager
 from app.core.database import AsyncSessionLocal
 from app.services.evaluation_service import EvaluationService
 from app.models.evaluation import Evaluation
 
 logger = get_task_logger(__name__)
-
-# WebSocket manager instance (will be initialized in FastAPI app)
-ws_manager: Optional[WebSocketManager] = None
 
 
 class EvaluationTask(Task):
@@ -116,6 +112,16 @@ async def _run_evaluation_async(
     evaluation_results = []
     missing_evaluators = []
     
+    # Update evaluation status to running in database immediately
+    if evaluation_ids:
+        async with AsyncSessionLocal() as db:
+            service = EvaluationService(db)
+            await service.update_evaluation_status(
+                evaluation_ids=evaluation_ids,
+                status="running"
+            )
+            logger.info(f"Updated {len(evaluation_ids)} evaluations to 'running' status")
+    
     # Transform test results to format expected by evaluator service
     test_cases = []
     for result in test_results:
@@ -137,12 +143,11 @@ async def _run_evaluation_async(
     # Get evaluator service URL
     evaluator_service_url = settings.evaluator_service_url or "http://localhost:9002"
     
-    # Send initial WebSocket update
-    await _send_websocket_update(
-        task.request.id,
-        "processing",
-        {"message": f"Starting evaluation with {len(evaluator_ids)} evaluators", "progress": 0}
-    )
+    # Log evaluation start
+    logger.info(f"Starting evaluation with {len(evaluator_ids)} evaluators for experiment {experiment_id}")
+    
+    # Brief delay to allow status propagation
+    await asyncio.sleep(0.5)
     
     async with httpx.AsyncClient(timeout=300.0) as client:
         # First, fetch available evaluators
@@ -178,13 +183,9 @@ async def _run_evaluation_async(
             try:
                 logger.info(f"Running evaluator {evaluator_id} ({idx + 1}/{total_evaluators})")
                 
-                # Send progress update
+                # Log progress update
                 progress = int(((idx + 0.5) / total_evaluators) * 100)
-                await _send_websocket_update(
-                    task.request.id,
-                    "processing",
-                    {"message": f"Running {evaluator_id}", "progress": progress}
-                )
+                logger.info(f"Running {evaluator_id} - {progress}% complete")
                 
                 # Call evaluator service
                 response = await client.post(
@@ -278,19 +279,18 @@ async def _run_evaluation_async(
         "average_score": avg_score
     }
     
-    # Send final WebSocket update
-    await _send_websocket_update(
-        task.request.id,
-        "completed",
-        {
-            "message": "Evaluation completed",
-            "progress": 100,
-            "results": evaluation_results,
-            "summary": summary
-        }
-    )
+    # Update evaluation status to completed in database
+    if evaluation_ids:
+        async with AsyncSessionLocal() as db:
+            service = EvaluationService(db)
+            await service.update_evaluation_status(
+                evaluation_ids=evaluation_ids,
+                status="completed",
+                result={"summary": summary, "results": evaluation_results}
+            )
     
-    logger.info(f"Completed evaluation for experiment {experiment_id} with {len(evaluation_results)} results")
+    # Log completion
+    logger.info(f"Completed evaluation for experiment {experiment_id} with {len(evaluation_results)} results, summary: {summary}")
     
     return {
         "task_id": task.request.id,
@@ -314,22 +314,6 @@ async def _mark_evaluations_failed(evaluation_ids: List[str], error_message: str
                 logger.error(f"Failed to mark evaluation {eval_id_str} as failed: {e}")
 
 
-async def _send_websocket_update(task_id: str, status: str, data: Dict[str, Any]):
-    """Send WebSocket update to connected clients."""
-    try:
-        if ws_manager:
-            message = {
-                "task_id": task_id,
-                "status": status,
-                "timestamp": datetime.utcnow().isoformat(),
-                **data
-            }
-            await ws_manager.broadcast(task_id, message)
-            logger.debug(f"Sent WebSocket update for task {task_id}: {status}")
-    except Exception as e:
-        logger.warning(f"Failed to send WebSocket update: {e}")
-
-
 @celery_app.task(name="cancel_evaluation")
 def cancel_evaluation_task(task_id: str) -> bool:
     """
@@ -345,17 +329,8 @@ def cancel_evaluation_task(task_id: str) -> bool:
         celery_app.control.revoke(task_id, terminate=True, signal="SIGTERM")
         logger.info(f"Cancelled evaluation task: {task_id}")
         
-        # Send WebSocket update
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(
-            _send_websocket_update(
-                task_id,
-                "cancelled",
-                {"message": "Evaluation cancelled by user", "progress": 0}
-            )
-        )
-        loop.close()
+        # Log cancellation
+        logger.info(f"Evaluation cancelled by user for task {task_id}")
         
         return True
     except Exception as e:

@@ -189,10 +189,9 @@ class ExperimentService:
         if not experiment:
             return False
         
-        # Don't allow deletion of running experiments
+        # Allow deletion of running experiments with a warning
         if experiment.status == ExperimentStatus.RUNNING:
-            logger.warning(f"Cannot delete running experiment: {experiment_id}")
-            return False
+            logger.warning(f"Deleting running experiment: {experiment_id}")
         
         # Delete related evaluations first (they have foreign key to experiment)
         evaluations_query = select(Evaluation).where(Evaluation.experiment_id == experiment_id)
@@ -222,7 +221,8 @@ class ExperimentService:
         background_tasks: Optional[BackgroundTasks] = None
     ) -> Dict[str, Any]:
         """
-        Execute an experiment.
+        Execute an experiment (only for automated/external-api experiments).
+        Manual experiments don't need execution.
         """
         experiment = await self.get_experiment(experiment_id)
         if not experiment:
@@ -231,6 +231,20 @@ class ExperimentService:
         if experiment.status in [ExperimentStatus.RUNNING, ExperimentStatus.COMPLETED]:
             raise ValueError(f"Experiment is already {experiment.status.value}")
         
+        # Check if this is an automated experiment with external-api
+        is_automated = (
+            experiment.agent_config and 
+            experiment.agent_config.get("model") == "external-api" and
+            experiment.agent_config.get("parameters", {}).get("endpoint_url")
+        )
+        
+        if not is_automated:
+            # Manual experiments don't need execution
+            raise ValueError("This experiment is configured for manual execution. Use the UI to input actual outputs.")
+        
+        # For automated experiments, they should use the /run-automated endpoint
+        # This endpoint might be called by legacy code, so we'll handle it gracefully
+        
         # Update status to running
         experiment.status = ExperimentStatus.RUNNING
         experiment.started_at = datetime.utcnow()
@@ -238,39 +252,18 @@ class ExperimentService:
         
         await self.db.commit()
         
-        # In production, this would trigger actual execution
-        # For now, we'll just return a status message
-        logger.info(f"Started execution of experiment: {experiment_id}")
+        logger.info(f"Started execution of automated experiment: {experiment_id}")
         
-        # If background tasks are enabled, we would queue the actual execution
-        if background_tasks and settings.enable_background_tasks:
-            background_tasks.add_task(
-                self._execute_experiment_async,
-                experiment_id,
-                batch_size,
-                timeout,
-                evaluator_ids
-            )
+        # Note: The actual execution should be done via the /run-automated endpoint
+        # which properly queues the Celery task with the HTTP endpoint configuration
         
         return {
-            "message": "Experiment execution started",
+            "message": "Experiment execution started. Use /run-automated endpoint for proper automated execution.",
             "experiment_id": str(experiment_id),
-            "status": "running"
+            "status": "running",
+            "note": "For automated experiments, use the /run-automated endpoint"
         }
     
-    async def _execute_experiment_async(
-        self,
-        experiment_id: UUID,
-        batch_size: Optional[int],
-        timeout: Optional[int],
-        evaluator_ids: Optional[List[str]]
-    ):
-        """
-        Async execution of experiment (background task).
-        """
-        # This would contain the actual execution logic
-        # For now, it's a placeholder
-        pass
     
     async def cancel_experiment(self, experiment_id: UUID) -> Optional[Experiment]:
         """

@@ -348,7 +348,31 @@ async def _execute_single_test(
             execution_time = (datetime.utcnow() - start_time).total_seconds() * 1000
             
             if response.status_code == 200:
-                response_data = response.json()
+                response_data = None
+                try:
+                    # Check if response is HTML (likely hitting a frontend page)
+                    content_type = response.headers.get("content-type", "")
+                    if "text/html" in content_type:
+                        logger.error(f"Received HTML response from {endpoint_url}. This appears to be a web page, not an API endpoint.")
+                        last_error = f"Invalid endpoint: {endpoint_url} returned HTML instead of JSON. Please use a valid API endpoint."
+                        continue
+                    
+                    response_data = response.json()
+                except Exception as json_error:
+                    logger.error(f"Failed to parse JSON response from {endpoint_url}: {json_error}")
+                    logger.error(f"Response text: {response.text[:500]}")
+                    last_error = f"Invalid JSON response: {str(json_error)}"
+                    continue
+                
+                if response_data is None:
+                    last_error = "Response data is None after parsing"
+                    continue
+                
+                # Ensure response_data is a dictionary
+                if not isinstance(response_data, dict):
+                    logger.error(f"Response is not a dictionary from {endpoint_url}. Type: {type(response_data)}")
+                    last_error = f"Invalid response format: expected dictionary, got {type(response_data).__name__}"
+                    continue
                 
                 # Extract actual output based on response format
                 if endpoint_url.endswith("/check"):
@@ -361,6 +385,12 @@ async def _execute_single_test(
                 # Determine test status
                 status = _determine_test_status(actual_output, expected_output)
                 
+                # Safely handle metadata
+                test_metadata = test_case.get("metadata") or {}
+                response_metadata = {}
+                if isinstance(response_data, dict):
+                    response_metadata = response_data.get("metadata", {})
+                
                 return {
                     "test_id": test_id,
                     "input": input_data,
@@ -369,9 +399,9 @@ async def _execute_single_test(
                     "status": status,
                     "execution_time": execution_time,
                     "metadata": {
-                        **test_case.get("metadata", {}),
+                        **test_metadata,
                         "attempt": attempt + 1,
-                        "response_metadata": response_data.get("metadata", {})
+                        "response_metadata": response_metadata
                     }
                 }
             else:
