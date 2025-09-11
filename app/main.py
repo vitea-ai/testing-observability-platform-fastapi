@@ -291,6 +291,19 @@ def create_application() -> FastAPI:
         prefix=settings.api_v1_prefix
     )
     
+    # WebSocket routes for real-time updates
+    from app.api.v1.endpoints.websockets import router as websocket_router
+    app.include_router(
+        websocket_router,
+        prefix="/ws",
+        tags=["WebSocket"]
+    )
+    
+    # Initialize WebSocket manager in Celery tasks
+    from app.workers.tasks import evaluation_tasks
+    from app.core.websocket_manager import ws_manager
+    evaluation_tasks.ws_manager = ws_manager
+    
     # Root endpoint
     @app.get("/", tags=["Root"])
     async def root():

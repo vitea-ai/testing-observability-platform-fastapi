@@ -493,6 +493,15 @@ class CSVParser:
     
     def _parse_experiment_row(self, row: Dict[str, Any], row_num: int) -> Optional[Dict[str, Any]]:
         """Parse a single experiment result row."""
+        # Clean NaN values from row
+        clean_row = {}
+        for k, v in row.items():
+            if pd.isna(v):
+                clean_row[k] = None
+            else:
+                clean_row[k] = v
+        row = clean_row
+        
         # Find input field
         input_value = (
             row.get('input') or
@@ -561,12 +570,13 @@ class CSVParser:
         if not actual_value:
             actual_value = row.get('output', '')
         
+        # Ensure no NaN values in result
         result = {
             "test_id": row.get('test_case_id') or row.get('test_id') or f"test_{row_num}",
             "test_case_type": row.get('test_case_type', 'single_turn'),
-            "input": input_value,
-            "expected_output": expected_value,
-            "actual_output": actual_value,
+            "input": input_value if not pd.isna(input_value) else "",
+            "expected_output": expected_value if not pd.isna(expected_value) else "",
+            "actual_output": actual_value if not pd.isna(actual_value) else "",
             "context": context,
             "retrieval_context": retrieval_context,
             "tools_called": tools_called,
@@ -578,8 +588,8 @@ class CSVParser:
                 "input": int(row.get('token_usage_input', 0)) if row.get('token_usage_input') else 0,
                 "output": int(row.get('token_usage_output', 0)) if row.get('token_usage_output') else 0
             } if row.get('token_usage_input') or row.get('token_usage_output') else None,
-            "error": row.get('error'),
-            "meta_data": metadata
+            "error": row.get('error') if row.get('error') and not pd.isna(row.get('error')) else None,
+            "meta_data": {k: v for k, v in metadata.items() if not pd.isna(v)}
         }
         
         return result

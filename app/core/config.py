@@ -120,6 +120,30 @@ class Settings(BaseSettings):
     redis_max_connections: int = Field(default=100)
     
     # ==========================================
+    # Celery Configuration (for async task processing)
+    # ==========================================
+    celery_broker_url: str = Field(
+        default="redis://localhost:6379/0",
+        description="Celery broker URL (Redis)"
+    )
+    celery_result_backend: str = Field(
+        default="redis://localhost:6379/0",
+        description="Celery result backend URL"
+    )
+    celery_task_default_queue: str = Field(
+        default="evaluations",
+        description="Default queue for Celery tasks"
+    )
+    celery_worker_concurrency: int = Field(
+        default=4,
+        description="Number of concurrent Celery workers"
+    )
+    celery_task_time_limit: int = Field(
+        default=600,
+        description="Maximum time for task execution in seconds"
+    )
+    
+    # ==========================================
     # Security Configuration
     # ==========================================
     secret_key: str = Field(
@@ -273,6 +297,20 @@ class Settings(BaseSettings):
         if self.testing:
             return self.test_database_url
         return self.database_url or "sqlite:///./test.db"
+    
+    def get_celery_broker_url(self) -> str:
+        """Get Celery broker URL with fallback to redis_url."""
+        if self.redis_url:
+            # Use redis_url if provided (for production environments)
+            return self.redis_url.replace("/0", "/1")  # Use database 1 for Celery
+        return self.celery_broker_url
+    
+    def get_celery_result_backend(self) -> str:
+        """Get Celery result backend URL with fallback to redis_url."""
+        if self.redis_url:
+            # Use redis_url if provided (for production environments)
+            return self.redis_url.replace("/0", "/2")  # Use database 2 for results
+        return self.celery_result_backend
 
 
 @lru_cache()
