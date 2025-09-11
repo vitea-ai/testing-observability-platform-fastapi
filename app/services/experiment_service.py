@@ -4,6 +4,7 @@ Experiment service layer for database operations.
 
 from typing import List, Optional, Dict, Any
 from uuid import UUID
+import uuid
 from datetime import datetime
 from sqlalchemy import select, and_, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -188,10 +189,9 @@ class ExperimentService:
         if not experiment:
             return False
         
-        # Don't allow deletion of running experiments
+        # Allow deletion of running experiments with a warning
         if experiment.status == ExperimentStatus.RUNNING:
-            logger.warning(f"Cannot delete running experiment: {experiment_id}")
-            return False
+            logger.warning(f"Deleting running experiment: {experiment_id}")
         
         # Delete related evaluations first (they have foreign key to experiment)
         evaluations_query = select(Evaluation).where(Evaluation.experiment_id == experiment_id)
@@ -221,7 +221,8 @@ class ExperimentService:
         background_tasks: Optional[BackgroundTasks] = None
     ) -> Dict[str, Any]:
         """
-        Execute an experiment.
+        Execute an experiment (only for automated/external-api experiments).
+        Manual experiments don't need execution.
         """
         experiment = await self.get_experiment(experiment_id)
         if not experiment:
@@ -230,6 +231,20 @@ class ExperimentService:
         if experiment.status in [ExperimentStatus.RUNNING, ExperimentStatus.COMPLETED]:
             raise ValueError(f"Experiment is already {experiment.status.value}")
         
+        # Check if this is an automated experiment with external-api
+        is_automated = (
+            experiment.agent_config and 
+            experiment.agent_config.get("model") == "external-api" and
+            experiment.agent_config.get("parameters", {}).get("endpoint_url")
+        )
+        
+        if not is_automated:
+            # Manual experiments don't need execution
+            raise ValueError("This experiment is configured for manual execution. Use the UI to input actual outputs.")
+        
+        # For automated experiments, they should use the /run-automated endpoint
+        # This endpoint might be called by legacy code, so we'll handle it gracefully
+        
         # Update status to running
         experiment.status = ExperimentStatus.RUNNING
         experiment.started_at = datetime.utcnow()
@@ -237,39 +252,18 @@ class ExperimentService:
         
         await self.db.commit()
         
-        # In production, this would trigger actual execution
-        # For now, we'll just return a status message
-        logger.info(f"Started execution of experiment: {experiment_id}")
+        logger.info(f"Started execution of automated experiment: {experiment_id}")
         
-        # If background tasks are enabled, we would queue the actual execution
-        if background_tasks and settings.enable_background_tasks:
-            background_tasks.add_task(
-                self._execute_experiment_async,
-                experiment_id,
-                batch_size,
-                timeout,
-                evaluator_ids
-            )
+        # Note: The actual execution should be done via the /run-automated endpoint
+        # which properly queues the Celery task with the HTTP endpoint configuration
         
         return {
-            "message": "Experiment execution started",
+            "message": "Experiment execution started. Use /run-automated endpoint for proper automated execution.",
             "experiment_id": str(experiment_id),
-            "status": "running"
+            "status": "running",
+            "note": "For automated experiments, use the /run-automated endpoint"
         }
     
-    async def _execute_experiment_async(
-        self,
-        experiment_id: UUID,
-        batch_size: Optional[int],
-        timeout: Optional[int],
-        evaluator_ids: Optional[List[str]]
-    ):
-        """
-        Async execution of experiment (background task).
-        """
-        # This would contain the actual execution logic
-        # For now, it's a placeholder
-        pass
     
     async def cancel_experiment(self, experiment_id: UUID) -> Optional[Experiment]:
         """
@@ -378,4 +372,101 @@ class ExperimentService:
         
         await self.db.commit()
         logger.info(f"Added {len(test_results)} test results to experiment {experiment_id}")
+        return True
+    
+    async def get_test_results(self, experiment_id: UUID) -> List[Dict[str, Any]]:
+        """
+        Get test results for an experiment (raw test cases).
+        """
+        query = select(TestResult).where(TestResult.experiment_id == experiment_id)
+        result = await self.db.execute(query)
+        test_results = result.scalars().all()
+        
+        return [
+            {
+                "test_id": r.test_id,
+                "input": r.input,
+                "expected_output": r.expected_output,
+                "actual_output": r.actual_output,
+                "context": r.context,
+                "status": r.status,
+                "execution_time": r.execution_time,
+                "error": r.error,
+                "metadata": r.meta_data if r.meta_data else {}
+            }
+            for r in test_results
+        ]
+    
+    async def update_experiment_status(
+        self,
+        experiment_id: UUID,
+        status: ExperimentStatus,
+        progress: Optional[float] = None,
+        error_message: Optional[str] = None
+    ) -> bool:
+        """
+        Update experiment status and progress.
+        """
+        query = select(Experiment).where(Experiment.id == experiment_id)
+        result = await self.db.execute(query)
+        experiment = result.scalar_one_or_none()
+        
+        if not experiment:
+            raise ValueError(f"Experiment {experiment_id} not found")
+        
+        experiment.status = status
+        
+        if progress is not None:
+            experiment.progress = progress
+        
+        if status == ExperimentStatus.RUNNING and not experiment.started_at:
+            experiment.started_at = datetime.utcnow()
+        
+        if status in [ExperimentStatus.COMPLETED, ExperimentStatus.FAILED, ExperimentStatus.CANCELLED]:
+            experiment.completed_at = datetime.utcnow()
+            if status == ExperimentStatus.COMPLETED:
+                experiment.progress = 100.0
+        
+        if error_message and status == ExperimentStatus.FAILED:
+            if not experiment.metadata:
+                experiment.metadata = {}
+            experiment.metadata["error"] = error_message
+        
+        await self.db.commit()
+        logger.info(f"Updated experiment {experiment_id} status to {status}")
+        return True
+    
+    async def store_test_results(
+        self,
+        experiment_id: UUID,
+        results: List[Dict[str, Any]]
+    ) -> bool:
+        """
+        Store or update test results from automated execution.
+        """
+        # Clear existing test results
+        delete_query = select(TestResult).where(TestResult.experiment_id == experiment_id)
+        existing_results = await self.db.execute(delete_query)
+        for result in existing_results.scalars():
+            await self.db.delete(result)
+        
+        # Add new test results
+        for result_data in results:
+            test_result = TestResult(
+                experiment_id=experiment_id,
+                test_id=result_data.get("test_id", str(uuid.uuid4())),
+                test_case_type="single_turn",
+                input=result_data.get("input", ""),
+                expected_output=result_data.get("expected_output", ""),
+                actual_output=result_data.get("actual_output", ""),
+                context=result_data.get("context", []),
+                status=result_data.get("status", "completed"),
+                execution_time=result_data.get("execution_time", 0),
+                error=result_data.get("error"),
+                meta_data=result_data.get("metadata", {})
+            )
+            self.db.add(test_result)
+        
+        await self.db.commit()
+        logger.info(f"Stored {len(results)} test results for experiment {experiment_id}")
         return True

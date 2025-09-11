@@ -26,6 +26,9 @@ class Evaluation(Base, TimestampMixin):
     evaluator_name = Column(String(255), nullable=False)
     evaluator_config = Column(JSONB, default=dict)
     
+    # Task tracking (for Celery)
+    task_id = Column(String(255), nullable=True, index=True)
+    
     # Results
     status = Column(String(50), default="pending", nullable=False, index=True)
     score = Column(Float, nullable=True)
@@ -62,6 +65,7 @@ class Evaluation(Base, TimestampMixin):
             "evaluator_id": self.evaluator_id,
             "evaluator_name": self.evaluator_name,
             "evaluator_config": self.evaluator_config,
+            "task_id": self.task_id,
             "status": self.status,
             "score": self.score,
             "results": self.results,
