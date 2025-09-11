@@ -8,6 +8,7 @@ from app.api.v1.endpoints import (
     health,
     datasets,
     experiments,
+    evaluations,
     evaluators,
     evaluation_analysis,
 )
@@ -34,6 +35,12 @@ api_router.include_router(
     experiments.router,
     prefix="/experiments",
     tags=["Experiments"]
+)
+
+api_router.include_router(
+    evaluations.router,
+    prefix="/evaluations",
+    tags=["Evaluations"]
 )
 
 api_router.include_router(
