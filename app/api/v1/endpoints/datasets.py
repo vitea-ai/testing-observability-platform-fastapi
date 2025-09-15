@@ -251,7 +251,7 @@ async def validate_csv(
         return {
             "valid": False,
             "error": str(e),
-            "warnings": csv_parser.warnings
+            "warnings": []
         }
 
 
