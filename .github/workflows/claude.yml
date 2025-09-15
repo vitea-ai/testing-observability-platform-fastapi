@@ -1,0 +1,78 @@
+name: Claude Code
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  claude:
+    # Run on PRs automatically or when @claude is mentioned in comments
+    if: |
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Claude Code
+        id: claude
+        uses: anthropics/claude-code-action@beta
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+          # Allow Claude to read CI results on PRs
+          additional_permissions: |
+            actions: read
+            contents: write
+          
+          # Use Claude Opus 4.1 for better code analysis
+          model: "claude-opus-4-1-20250805"
+          
+          # Allow Claude to run FastAPI-specific commands
+          allowed_tools: "Bash(uv sync*),Bash(uv run*),Bash(uv add*),Bash(alembic*),Bash(pytest*),Bash(black*),Bash(isort*),Bash(ruff*),Bash(mypy*)"
+          
+          # Custom instructions for this FastAPI project
+          custom_instructions: |
+            This is a FastAPI project implementing a tiered architecture for HIPAA-compliant governance platforms.
+            
+            Key responsibilities:
+            1. Review code changes for quality, security, and best practices
+            2. Ensure code follows the patterns defined in CLAUDE.md
+            3. Check that new code includes appropriate tests
+            4. Verify code formatting with black and isort
+            5. Run type checking with mypy
+            6. Execute tests with pytest to ensure no regressions
+            7. Provide constructive feedback on improvements
+            
+            Focus areas:
+            - FastAPI best practices and patterns
+            - Pydantic schema validation
+            - SQLAlchemy model design
+            - Security considerations for HIPAA compliance
+            - Performance optimizations
+            - Test coverage
+            
+            Use uv for all dependency management and command execution.
+            Follow the tiered deployment architecture (Tier 1-4).
+          
+          # Environment variables for Claude
+          claude_env: |
+            APP_ENV: development
+            PYTHONPATH: .

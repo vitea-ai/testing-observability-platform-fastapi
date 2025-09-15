@@ -1,0 +1,67 @@
+Test ID,Scenario Name,Setting,Specialty,Test Script Dialogue,Scribe Summary Output (SOAP Assessment or Simiar),Evaluation Criteria
+TEST-001,Cardiology Consultation for Palpitations,Outpatient Cardiology Clinic,Cardiology,"Doctor: ""Mr. Thompson, your primary care doctor referred you for heart palpitations. Tell me about them.""
+Patient: ""For the past two months, I get these episodes where my heart suddenly races. It feels like it's going to jump out of my chest."" 
+Doctor: ""How long do they last?"" 
+Patient: ""Usually 5 to 10 minutes, then they stop suddenly."" 
+Doctor: ""How often?"" 
+Patient: ""Maybe twice a week. Sometimes when I'm exercising, sometimes just sitting."" 
+Doctor: ""Any chest pain, dizziness, or fainting?"" 
+Patient: ""I feel a bit lightheaded during them, but I've never passed out."" 
+Doctor: ""Are you taking any medications?"" 
+Patient: ""Just losartan for blood pressure, 50mg daily."" 
+Doctor: ""Any caffeine, alcohol, drugs?"" 
+Patient: ""Two cups of coffee in the morning, glass of wine with dinner most nights."" 
+Doctor: ""Family history of heart problems?"" 
+Patient: ""My mother has atrial fibrillation."" 
+Doctor: ""Your EKG today shows normal sinus rhythm. Your echo from last month showed normal ejection fraction of 60%, no structural abnormalities. Based on your symptoms - sudden onset and offset, brief duration - this sounds like paroxysmal supraventricular tachycardia. I'm ordering a 30-day event monitor to capture these episodes. Meanwhile, try vagal maneuvers when they occur - bearing down or coughing forcefully. If we confirm PSVT, we can discuss beta blockers or ablation. Reduce caffeine to one cup daily.""","Ms. Smith, age not specified and with no chronic illnesses mentioned, presents with progressive left knee pain and swelling. She reports that the pain has been present for a while and is exacerbated by physical activity such as exercise, long walks, climbing stairs, and walking her dog. Recently, the pain has intensified, with increased swelling, clicking, and sharp pains, particularly after straightening the knee. The discomfort is now severe enough to disrupt her sleep. She denies any history of trauma or injury to the knee. The pain is localized to the anterior aspect of the knee and is described as equally affecting both sides. 
+
+Current Medications: No relevant info. 
+Past medical history: No relevant info. 
+Past surgical history: No relevant info. 
+Family history: No relevant info. 
+Allergies: No relevant info. 
+Social History: No relevant info regarding smoking or alcohol use.General: Denies fevers or chills.
+ENT: Denies changes in vision or hearing.
+CV: Denies chest pain or palpitations.
+Pulm: Denies shortness of breath.
+Gl: Denies nausea, vomiting, abdominal pain, diarrhea, or constipation.
+GU: Denies dysuria or difficulty urinating.
+MSK: Denies neck pain or back pain.
+Neuro: Denies weakness or FND.Vital Signs: N/A
+Physical examination findings: Gen: well appearing HEENT: PERRLA, nares patent, oropharynx clear Neck: supple, no bruit, no adenopathy, trachea midline Heart: RRR, no murmurs, no gallops, no rubs Lung: CTA B/L Abd: +BS, soft, non-tender, non-distended, no rebound/guarding XTR: 2+ pulse x4, no thrill/bruit, MS equal, no erythema/swelling Neuro: AAO x4, no focal neurological deficits Skin: warm, dry, no erythema, no streaking, no increased color.
+Diagnostic Test result: N/AMs. Smith presents with a history of progressive left knee pain and swelling, worsened by activity and now interfering with sleep. She has no history of trauma or chronic medical conditions. No consults are currently on board. 
+
+1. M25.569 (Pain in unspecified knee)
+- Recommend obtaining knee X-rays to evaluate for structural abnormalities or degenerative changes.
+- Consider MRI if X-rays are inconclusive and symptoms persist.
+- Advise rest, ice, compression, and elevation (RICE protocol) for symptom management.
+- Recommend NSAIDs for pain control if no contraindications.
+- Assess for possible physical therapy referral if pain persists or functional limitation continues.
+- Monitor for signs of infection (increased redness, warmth, fever).
+- Counsel on activity modification to avoid exacerbating movements.
+- Age-appropriate screening: If over 50, recommend annual blood pressure, cholesterol, and diabetes screening per USPSTF guidelines.This visit is a NPT 3. The complexity is moderate due to the new onset of significant knee pain and swelling without clear etiology, requiring further diagnostic evaluation and management.
+
+Number and Complexity of Problems Addressed: One new musculoskeletal complaint (left knee pain and swelling) with moderate complexity due to the need for imaging and possible further workup.
+Data Reviewed and Analyzed: No diagnostic tests reviewed at this visit; imaging is recommended.
+Risk of Complications, Morbidity, or Mortality: Moderate, as the pain is interfering with sleep and daily activities, and further workup is needed to rule out serious pathology.
+
+Total Time Spent: 30 minutes
+Breakdown of Time:
+Time spent on history-taking and examination: 20 minutes
+Time spent counseling and coordinating care: 10 minutes
+
+Example Statement: ""Total time spent on the patient visit was 30 minutes, including 10 minutes of counseling and coordination of care.""","High Weightage
+1.	Reason for Consultation: - Referred by PCP for evaluation of palpitations 
+2.	History of Present Illness: - Duration: 2 months - Frequency: Approximately twice weekly - Episode duration: 5-10 minutes - Character: Sudden onset and termination - Triggers: Both exertional and at rest - Associated symptoms: Mild lightheadedness, no syncope 
+3.	Medications: - Losartan 50mg daily for hypertension 
+Medium Weightage
+4.	Relevant social history: - Caffeine: 2 cups coffee daily (morning) - Alcohol: 1 glass wine with dinner - Denies illicit drug use 
+5.	Family History: - Mother: Atrial fibrillation 
+6.	Previous test results reviewed: - Echocardiogram (1 month ago): EF 60%, no structural abnormalities 
+7.	Physical exam findings: - EKG: Normal sinus rhythm 
+Low Weightage
+8.	Differential diagnosis: - Probable paroxysmal supraventricular tachycardia (PSVT) 
+9.	Diagnostic Plan with rationale: - 30-day event monitor for episode correlation 
+10.	Treatment Plan: - Vagal maneuver education (bearing down, cough) - Lifestyle modification: Reduce caffeine to 1 cup daily - Future options discussed: Beta blockers, ablation therapy 
+11.	Follow-up plan should be documented"
+,Pediatric Well Child Check - 4 Year Old,Pediatric Primary Care Clinic,Pediatrics,"Doctor: ""Hi Sarah and Mom! How are things going?"" Mom: ""She's doing great. Very active, maybe too active sometimes!"" Doctor: ""Tell me about her eating and sleeping."" Mom: ""She's a picky eater, loves chicken nuggets and mac and cheese, we struggle with vegetables. She sleeps about 10 hours a night, no more naps."" Doctor: ""Any concerns about her development?"" Mom: ""No, she knows all her letters, counts to 20, and never stops talking. She's starting pre-K next month."" Doctor: ""Great! Any behavioral concerns?"" Mom: ""Just typical 4-year-old tantrums when she doesn't get her way."" Doctor: ""How about screen time?"" Mom: ""We try to limit it to an hour a day, but it's hard."" Doctor: ""Let's do her exam. *examination* Weight is 38 pounds, 50th percentile. Height 40 inches, 60th percentile. BMI is normal. Vision screening 20/30 both eyes, hearing passed. Heart and lungs sound perfect. Abdomen soft. She's due for her 4-year vaccines today - DTaP, IPV, MMR, and varicella. We'll also do a finger stick for hemoglobin and lead level. For the picky eating, keep offering variety, no pressure. She's growing well. Make sure she's in a booster seat in the car.""",,"1. Visit Type: 4-year well child check 2. Growth Parameters: - Weight: 38 lbs (50th percentile) - Height: 40 inches (60th percentile) - BMI: Normal range for age 3. Developmental Assessment: - Cognitive: Knows letters, counts to 20 - Language: Age-appropriate (talks frequently) - School readiness: Starting pre-K 4. Behavioral Assessment: - Age-appropriate tantrums noted - No significant concerns 5. Nutrition: - Picky eater (prefers chicken nuggets, mac and cheese) - Difficulty with vegetables 6. Sleep: - 10 hours nightly - No daytime naps 7. Screen Time: - Goal of 1 hour daily (with challenges) 8. Physical Examination: - Vision: 20/30 OU - Hearing: Passed - Heart: Normal - Lungs: Clear - Abdomen: Soft, non-tender 9. Immunizations Given: - DTaP, IPV, MMR, Varicella 10. Screening Tests: - Hemoglobin level - Lead level 11. Anticipatory Guidance: - Nutrition counseling - Car seat safety (booster seat)"

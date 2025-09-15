@@ -1,0 +1,5 @@
+test_id,input,expected_output,actual_output,execution_time,test_case_type
+test_001,"What is 2+2?","4","4",125,single_turn
+test_002,"What is the capital of France?","Paris","Paris",98,single_turn
+test_003,"How many days in a week?","7 days","Seven days",112,single_turn
+test_004,"What is AI?","Artificial Intelligence","AI stands for Artificial Intelligence",145,single_turn
