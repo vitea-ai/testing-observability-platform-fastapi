@@ -267,7 +267,7 @@ async def test_piiguard():
     """Test PiiGuard connection directly."""
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.get("http://127.0.0.1:8080/health")
+            response = await client.get(f"{PIIGUARD_URL}/health")
             return {"status": "success", "piiguard_status": response.status_code}
     except Exception as e:
         return {"status": "error", "error": str(e), "type": type(e).__name__}
