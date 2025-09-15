@@ -265,10 +265,10 @@ async def process_prompt_injection(request: GuardrailRequest):
 @router.get("/test-piiguard")
 async def test_piiguard():
     """Test PiiGuard connection directly."""
-    import requests
     try:
-        response = requests.get("http://127.0.0.1:8080/health", timeout=5.0)
-        return {"status": "success", "piiguard_status": response.status_code}
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get("http://127.0.0.1:8080/health")
+            return {"status": "success", "piiguard_status": response.status_code}
     except Exception as e:
         return {"status": "error", "error": str(e), "type": type(e).__name__}
 
