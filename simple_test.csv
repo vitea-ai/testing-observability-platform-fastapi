@@ -1,0 +1,4 @@
+input,output,expected_output
+"What is 2+2?","4","4"
+"What is the capital of France?","Paris","Paris"
+"How many days in a week?","7","7 days"

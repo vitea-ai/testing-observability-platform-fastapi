@@ -38,6 +38,13 @@ services:
       APP_ENABLE_AUTHENTICATION: ${APP_ENABLE_AUTHENTICATION:-false}
       APP_ENABLE_AUDIT_LOGGING: ${APP_ENABLE_AUDIT_LOGGING:-true}
       APP_ENABLE_HEALTHCARE_MODE: ${APP_ENABLE_HEALTHCARE_MODE:-true}
+      # CORS configuration
+      APP_CORS_ORIGINS: ${APP_CORS_ORIGINS:-["http://localhost:3000","http://localhost:3001","http://localhost:8001","http://localhost:8003"]}
+      # Guardrails service URLs
+      PIIGUARD_SERVICE_URL: http://pii-guard-v2:8080
+      SECRETS_DETECTOR_SERVICE_URL: http://secrets-detector:8081
+      PROFANITY_GUARD_SERVICE_URL: http://profanity-guardrail:8082
+      JAILBREAK_GUARD_SERVICE_URL: http://jailbreak-guard:8086
       # Redis and Celery configuration
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
