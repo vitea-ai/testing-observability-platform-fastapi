@@ -14,7 +14,7 @@ from celery.utils.log import get_task_logger
 from app.workers.celery_app import celery_app
 from app.core.config import settings
 from app.core.websocket_manager import WebSocketManager
-from app.core.database import AsyncSessionLocal
+from app.core.database import CelerySessionLocal
 from app.services.experiment_service import ExperimentService
 from app.models.experiment import ExperimentStatus
 
@@ -29,7 +29,7 @@ class ExperimentRunnerTask(Task):
     
     async def get_db_session(self):
         """Get a database session for the task."""
-        async with AsyncSessionLocal() as session:
+        async with CelerySessionLocal() as session:
             yield session
 
 
@@ -199,7 +199,7 @@ async def _run_experiment_async(
                     results.append(result)
     
     # Update experiment in database
-    async with AsyncSessionLocal() as db:
+    async with CelerySessionLocal() as db:
         service = ExperimentService(db)
         
         # Store test results
@@ -440,7 +440,7 @@ async def _execute_single_test(
 
 async def _mark_experiment_failed(experiment_id: str, error_message: str):
     """Mark experiment as failed."""
-    async with AsyncSessionLocal() as db:
+    async with CelerySessionLocal() as db:
         service = ExperimentService(db)
         try:
             await service.update_experiment_status(
