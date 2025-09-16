@@ -13,7 +13,7 @@ from celery.utils.log import get_task_logger
 
 from app.workers.celery_app import celery_app
 from app.core.config import settings
-from app.core.database import AsyncSessionLocal
+from app.core.database import CelerySessionLocal
 from app.services.evaluation_service import EvaluationService
 from app.models.evaluation import Evaluation
 
@@ -25,7 +25,7 @@ class EvaluationTask(Task):
     
     async def get_db_session(self):
         """Get a database session for the task."""
-        async with AsyncSessionLocal() as session:
+        async with CelerySessionLocal() as session:
             yield session
 
 
@@ -114,7 +114,7 @@ async def _run_evaluation_async(
     
     # Update evaluation status to running in database immediately
     if evaluation_ids:
-        async with AsyncSessionLocal() as db:
+        async with CelerySessionLocal() as db:
             service = EvaluationService(db)
             await service.update_evaluation_status(
                 evaluation_ids=evaluation_ids,
@@ -231,7 +231,7 @@ async def _run_evaluation_async(
                 })
     
     # Update evaluation records in database
-    async with AsyncSessionLocal() as db:
+    async with CelerySessionLocal() as db:
         eval_service = EvaluationService(db)
         
         for i, evaluator_id in enumerate(evaluator_ids):
@@ -281,7 +281,7 @@ async def _run_evaluation_async(
     
     # Update evaluation status to completed in database
     if evaluation_ids:
-        async with AsyncSessionLocal() as db:
+        async with CelerySessionLocal() as db:
             service = EvaluationService(db)
             await service.update_evaluation_status(
                 evaluation_ids=evaluation_ids,
@@ -304,7 +304,7 @@ async def _run_evaluation_async(
 
 async def _mark_evaluations_failed(evaluation_ids: List[str], error_message: str):
     """Mark all evaluations as failed."""
-    async with AsyncSessionLocal() as db:
+    async with CelerySessionLocal() as db:
         eval_service = EvaluationService(db)
         for eval_id_str in evaluation_ids:
             try:

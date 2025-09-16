@@ -25,9 +25,13 @@ engine = create_async_engine(
     else "sqlite+aiosqlite:///./test.db",  # Fallback for Tier 1
     echo=settings.debug,
     pool_pre_ping=True,  # Verify connections are alive
-    pool_size=20,
-    max_overflow=40,
+    pool_size=20,  # Conservative pool size to avoid exhausting PostgreSQL
+    max_overflow=20,  # Total of 40 connections max for main API
     pool_recycle=3600,  # Recycle connections after 1 hour
+    pool_timeout=10,  # Wait up to 10 seconds for a connection (faster failure)
+    connect_args={
+        "options": "-c statement_timeout=60000 -c jit=off"  # 60 second statement timeout and disable JIT
+    } if settings.database_url and "postgresql" in settings.database_url else {}
 )
 
 # Create async session factory
@@ -35,6 +39,29 @@ AsyncSessionLocal = async_sessionmaker(
     engine,
     class_=AsyncSession,
     expire_on_commit=False,  # Don't expire objects after commit
+)
+
+# Create a separate engine for Celery workers with smaller pool
+celery_engine = create_async_engine(
+    settings.database_url.replace("postgresql://", "postgresql+psycopg://")
+    if settings.database_url
+    else "sqlite+aiosqlite:///./test.db",
+    echo=False,  # Less logging for workers
+    pool_pre_ping=True,
+    pool_size=5,  # Small pool for workers to avoid connection exhaustion
+    max_overflow=10,  # Total of 15 connections max for Celery
+    pool_recycle=3600,
+    pool_timeout=5,  # Shorter timeout for workers
+    connect_args={
+        "options": "-c statement_timeout=60000 -c jit=off"  # 60 second statement timeout and disable JIT
+    } if settings.database_url and "postgresql" in settings.database_url else {}
+)
+
+# Celery worker session factory
+CelerySessionLocal = async_sessionmaker(
+    celery_engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
 )
 
 # Base class for SQLAlchemy models
