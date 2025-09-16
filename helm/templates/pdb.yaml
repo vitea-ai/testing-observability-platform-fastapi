@@ -1,0 +1,37 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "eval-platform.fullname" . }}-api
+  namespace: vitea-data
+  labels:
+    {{- include "eval-platform.apiLabels" . | nindent 4 }}
+spec:
+  {{- if .Values.podDisruptionBudget.api.minAvailable }}
+  minAvailable: {{ .Values.podDisruptionBudget.api.minAvailable }}
+  {{- end }}
+  {{- if .Values.podDisruptionBudget.api.maxUnavailable }}
+  maxUnavailable: {{ .Values.podDisruptionBudget.api.maxUnavailable }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "eval-platform.apiSelectorLabels" . | nindent 6 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "eval-platform.fullname" . }}-worker
+  namespace: vitea-data
+  labels:
+    {{- include "eval-platform.workerLabels" . | nindent 4 }}
+spec:
+  {{- if .Values.podDisruptionBudget.worker.minAvailable }}
+  minAvailable: {{ .Values.podDisruptionBudget.worker.minAvailable }}
+  {{- end }}
+  {{- if .Values.podDisruptionBudget.worker.maxUnavailable }}
+  maxUnavailable: {{ .Values.podDisruptionBudget.worker.maxUnavailable }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "eval-platform.workerSelectorLabels" . | nindent 6 }}
+{{- end }}

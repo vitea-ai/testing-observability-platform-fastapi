@@ -1,0 +1,184 @@
+# Base values for eval-platform
+# Default configuration for dev/prod environments
+
+nameOverride: "eval-platform"
+fullnameOverride: "eval-platform"
+
+# API Configuration
+api:
+  replicaCount: 2
+  image:
+    repository: viteadevacr.azurecr.io/eval-platform-api
+    tag: latest
+    pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP
+    port: 8000
+    targetPort: 8000
+
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 200m
+      memory: 256Mi
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+
+# Celery Worker Configuration
+worker:
+  replicaCount: 2
+  image:
+    repository: viteadevacr.azurecr.io/eval-platform-worker
+    tag: latest
+    pullPolicy: IfNotPresent
+
+  command:
+    - /app/.venv/bin/celery
+    - -A
+    - app.workers.celery_app
+    - worker
+    - --loglevel=info
+    - --concurrency=2
+
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 300m
+      memory: 512Mi
+
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+
+# Environment Variables
+env:
+  # Application settings
+  APP_ENV: development
+  APP_PORT: "8000"
+  APP_DEPLOYMENT_TIER: development
+  APP_ENABLE_AUTHENTICATION: "false"
+  APP_ENABLE_AUDIT_LOGGING: "true"
+  APP_ENABLE_HEALTHCARE_MODE: "true"
+
+  # CORS configuration
+  APP_CORS_ORIGINS: '["http://localhost:3000","http://localhost:8000","http://localhost:9000"]'
+
+  # Service discovery - using K8s DNS
+  APP_EVALUATOR_SERVICE_URL: "http://eval-platform-evaluator.vitea-data.svc.cluster.local:8001"
+
+  # Guardrail service URLs
+  PIIGUARD_SERVICE_URL: "http://pii-guard.vitea-data.svc.cluster.local:8080"
+  POLICY_ENGINE_URL: "http://policy-engine.vitea-data.svc.cluster.local:8000"
+
+  # Redis configuration (using shared Redis with dedicated databases)
+  REDIS_HOST: "redis.vitea-infra.svc.cluster.local"
+  REDIS_PORT: "6379"
+  REDIS_URL: "redis://redis.vitea-infra.svc.cluster.local:6379/2"
+  CELERY_BROKER_URL: "redis://redis.vitea-infra.svc.cluster.local:6379/3"
+  CELERY_RESULT_BACKEND: "redis://redis.vitea-infra.svc.cluster.local:6379/4"
+
+  # Database configuration (using shared PostgreSQL)
+  DB_HOST: "postgres.vitea-infra.svc.cluster.local"
+  DB_PORT: "5432"
+  DB_NAME: "evaluation_db"
+  DB_USER: "eval_user"
+
+  # OpenTelemetry configuration
+  OTEL_SERVICE_NAME: "eval-platform"
+  ENABLE_METRICS: "true"
+
+  # Logging
+  LOG_LEVEL: "INFO"
+  LOG_FORMAT: "json"
+
+# Security context
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+    - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1000
+
+# Service account
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# Pod disruption budget
+podDisruptionBudget:
+  enabled: true
+  api:
+    minAvailable: 1
+  worker:
+    minAvailable: 1
+
+# External Secrets configuration
+externalSecrets:
+  enabled: true
+  secretStore: azure-keyvault
+  refreshInterval: 30s
+  secrets:
+    dbPassword: "eval-platform-db-password"
+    redisPassword: "redis-password"
+
+# Database migration job
+migration:
+  enabled: true
+  image:
+    repository: viteadevacr.azurecr.io/eval-platform-api
+    tag: latest
+    pullPolicy: IfNotPresent
+  command:
+    - /app/.venv/bin/python
+    - -m
+    - alembic
+    - upgrade
+    - head
+
+# Health checks
+healthChecks:
+  api:
+    livenessProbe:
+      httpGet:
+        path: /health
+        port: 8000
+      initialDelaySeconds: 30
+      periodSeconds: 10
+    readinessProbe:
+      httpGet:
+        path: /health
+        port: 8000
+      initialDelaySeconds: 10
+      periodSeconds: 5
+  worker:
+    livenessProbe:
+      exec:
+        command:
+        - /app/.venv/bin/celery
+        - -A
+        - app.workers.celery_app
+        - inspect
+        - ping
+      initialDelaySeconds: 60
+      periodSeconds: 30
