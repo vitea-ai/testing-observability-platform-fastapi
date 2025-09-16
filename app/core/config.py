@@ -123,11 +123,11 @@ class Settings(BaseSettings):
     # Celery Configuration (for async task processing)
     # ==========================================
     celery_broker_url: str = Field(
-        default="redis://:vitea_redis_dev_2024@localhost:6379/3",
+        default="redis://localhost:6379/0",
         description="Celery broker URL (Redis)"
     )
     celery_result_backend: str = Field(
-        default="redis://:vitea_redis_dev_2024@localhost:6379/4",
+        default="redis://localhost:6379/0",
         description="Celery result backend URL"
     )
     celery_task_default_queue: str = Field(
@@ -302,14 +302,14 @@ class Settings(BaseSettings):
         """Get Celery broker URL with fallback to redis_url."""
         if self.redis_url:
             # Use redis_url if provided (for production environments)
-            return self.redis_url.replace("/2", "/3")  # Use database 3 for Celery
+            return self.redis_url.replace("/0", "/1")  # Use database 1 for Celery
         return self.celery_broker_url
 
     def get_celery_result_backend(self) -> str:
         """Get Celery result backend URL with fallback to redis_url."""
         if self.redis_url:
             # Use redis_url if provided (for production environments)
-            return self.redis_url.replace("/2", "/4")  # Use database 4 for results
+            return self.redis_url.replace("/0", "/2")  # Use database 2 for results
         return self.celery_result_backend
 
 

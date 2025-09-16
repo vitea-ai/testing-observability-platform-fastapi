@@ -1,54 +1,42 @@
-services:
-  # PostgreSQL Database
-  eval-postgres-fastapi:
-    image: postgres:15-alpine
-    container_name: eval-postgres-fastapi
-    environment:
-      POSTGRES_DB: ${DB_NAME:-evaluation_db}
-      POSTGRES_USER: ${DB_USER:-evaladmin}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres123}
-    ports:
-      - "5433:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-evaladmin} -d ${DB_NAME:-evaluation_db}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - vitea-shared-network
-    labels:
-      - "logs.collect=true"
-      - "logs.service=testing-observability-postgres"
+version: '3.8'
 
-  # FastAPI Application
-  api:
+services:
+
+  # FastAPI Evaluation Service
+  eval-api-fastapi:
     build:
       context: .
       dockerfile: Dockerfile
+    image: testing-observability-platform-fastapi:latest
     container_name: eval-api-fastapi
     environment:
       APP_ENV: ${APP_ENV:-integration}
       APP_PORT: 8000
-      APP_DATABASE_URL: ${APP_DATABASE_URL}
-      DATABASE_URL: ${DATABASE_URL}
-      APP_EVALUATOR_SERVICE_URL: ${APP_EVALUATOR_SERVICE_URL}
-      APP_DEPLOYMENT_TIER: integration
+      APP_DATABASE_URL: postgresql://${DB_USER:-anand}@${DB_HOST:-host.docker.internal}:${DB_PORT:-5432}/${DB_NAME:-eval_db}
+      DATABASE_URL: postgresql://${DB_USER:-anand}@${DB_HOST:-host.docker.internal}:${DB_PORT:-5432}/${DB_NAME:-eval_db}
+      APP_EVALUATOR_SERVICE_URL: http://evaluator-service:8001
+      APP_DEPLOYMENT_TIER: ${EVAL_DEPLOYMENT_TIER:-integration}
       APP_ENABLE_AUTHENTICATION: ${APP_ENABLE_AUTHENTICATION:-false}
       APP_ENABLE_AUDIT_LOGGING: ${APP_ENABLE_AUDIT_LOGGING:-true}
       APP_ENABLE_HEALTHCARE_MODE: ${APP_ENABLE_HEALTHCARE_MODE:-true}
       # CORS configuration
       APP_CORS_ORIGINS: ${APP_CORS_ORIGINS:-["http://localhost:3000","http://localhost:3001","http://localhost:8001","http://localhost:8003"]}
-      # Guardrails service URLs
-      PIIGUARD_SERVICE_URL: http://pii-guard-v2:8080
-      SECRETS_DETECTOR_SERVICE_URL: http://secrets-detector:8081
-      PROFANITY_GUARD_SERVICE_URL: http://profanity-guardrail:8082
-      JAILBREAK_GUARD_SERVICE_URL: http://jailbreak-guard:8086
-      # Redis and Celery configuration
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      # Guardrails service URLs (external services)
+      PIIGUARD_SERVICE_URL: ${PIIGUARD_SERVICE_URL:-http://host.docker.internal:8080}
+      SECRETS_DETECTOR_SERVICE_URL: ${SECRETS_DETECTOR_SERVICE_URL:-http://host.docker.internal:8081}
+      PROFANITY_GUARD_SERVICE_URL: ${PROFANITY_GUARD_SERVICE_URL:-http://host.docker.internal:8082}
+      JAILBREAK_GUARD_SERVICE_URL: ${JAILBREAK_GUARD_SERVICE_URL:-http://host.docker.internal:8086}
+      # OpenAI/Azure OpenAI configuration for DeepTeam vulnerability scanning
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      USE_AZURE_OPENAI: ${USE_AZURE_OPENAI}
+      AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT}
+      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY}
+      AZURE_OPENAI_DEPLOYMENT: ${AZURE_OPENAI_DEPLOYMENT}
+      AZURE_OPENAI_API_VERSION: ${AZURE_OPENAI_API_VERSION}
+      # Redis and Celery configuration (using external Redis)
+      REDIS_URL: ${EXTERNAL_REDIS_URL:-redis://localhost:6379/0}
+      CELERY_BROKER_URL: ${EXTERNAL_REDIS_BROKER_URL:-redis://localhost:6379/1}
+      CELERY_RESULT_BACKEND: ${EXTERNAL_REDIS_RESULT_URL:-redis://localhost:6379/2}
       # OpenTelemetry configuration for observability
       OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-http://host.docker.internal:10318/v1/traces}
       OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: ${OTEL_EXPORTER_OTLP_LOGS_ENDPOINT:-http://host.docker.internal:10318/v1/logs}
@@ -56,11 +44,7 @@ services:
       ENABLE_METRICS: "true"
     ports:
       - "8000:8000"
-    depends_on:
-      eval-postgres-fastapi:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+    # No longer depends on local Redis service
     volumes:
       - ./app:/app/app:ro
       - ./alembic:/app/alembic:ro
@@ -98,45 +82,21 @@ services:
       - "logs.collect=true"
       - "logs.service=vitea-evaluator-service"
 
-  # Redis Cache (Now used for Celery in all tiers)
-  redis:
-    image: redis:7-alpine
-    container_name: eval-redis-fastapi
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    networks:
-      - vitea-shared-network
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    labels:
-      - "logs.collect=true"
-      - "logs.service=testing-observability-redis"
-  
+  # Redis service removed - using external Redis instead
+
   # Celery Worker for Async Evaluation
   celery-worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: testing-observability-platform-fastapi:latest
     container_name: eval-celery-worker
     environment:
       APP_ENV: ${APP_ENV:-integration}
-      APP_DATABASE_URL: postgresql://${DB_USER:-evaladmin}:${DB_PASSWORD:-postgres123}@eval-postgres-fastapi:5432/${DB_NAME:-evaluation_db}
-      DATABASE_URL: postgresql://${DB_USER:-evaladmin}:${DB_PASSWORD:-postgres123}@eval-postgres-fastapi:5432/${DB_NAME:-evaluation_db}
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      APP_DATABASE_URL: postgresql://${DB_USER:-anand}@${DB_HOST:-host.docker.internal}:${DB_PORT:-5432}/${DB_NAME:-eval_db}
+      DATABASE_URL: postgresql://${DB_USER:-anand}@${DB_HOST:-host.docker.internal}:${DB_PORT:-5432}/${DB_NAME:-eval_db}
+      REDIS_URL: ${EXTERNAL_REDIS_URL:-redis://localhost:6379/0}
+      CELERY_BROKER_URL: ${EXTERNAL_REDIS_BROKER_URL:-redis://localhost:6379/1}
+      CELERY_RESULT_BACKEND: ${EXTERNAL_REDIS_RESULT_URL:-redis://localhost:6379/2}
       APP_EVALUATOR_SERVICE_URL: http://evaluator-service:8001
-    depends_on:
-      eval-postgres-fastapi:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+    # No longer depends on local Redis service
     volumes:
       - ./app:/app/app:ro
     networks:
@@ -147,11 +107,82 @@ services:
       - "logs.collect=true"
       - "logs.service=testing-observability-celery"
 
-volumes:
-  postgres_data:
-    driver: local
-  redis_data:
-    driver: local
+  # Guardrails Services (now included in this repo's docker-compose)
+  pii-guard-v2:
+    image: anandgupta251094/pii-guard:v2-latest
+    container_name: eval-pii-guard
+    ports:
+      - "8080:8080"
+    environment:
+      - LOG_LEVEL=INFO
+    networks:
+      - vitea-shared-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - "logs.collect=true"
+      - "logs.service=pii-guard"
+
+  secrets-detector:
+    image: anandgupta251094/secrets-detector:latest
+    container_name: eval-secrets-detector
+    ports:
+      - "8081:8081"
+    environment:
+      - LOG_LEVEL=INFO
+    networks:
+      - vitea-shared-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - "logs.collect=true"
+      - "logs.service=secrets-detector"
+
+  profanity-guardrail:
+    image: anandgupta251094/profanity-guardrail:latest
+    container_name: eval-profanity-guardrail
+    ports:
+      - "8082:8082"
+    environment:
+      - LOG_LEVEL=INFO
+    networks:
+      - vitea-shared-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - "logs.collect=true"
+      - "logs.service=profanity-guardrail"
+
+  jailbreak-guard:
+    image: anandgupta251094/jailbreak-guard:latest
+    container_name: eval-jailbreak-guard
+    ports:
+      - "8086:8086"
+    environment:
+      - LOG_LEVEL=INFO
+    networks:
+      - vitea-shared-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8086/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - "logs.collect=true"
+      - "logs.service=jailbreak-guard"
 
 networks:
   vitea-shared-network:
