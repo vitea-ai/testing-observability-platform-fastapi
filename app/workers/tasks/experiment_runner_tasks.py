@@ -310,27 +310,10 @@ async def _execute_single_test(
     expected_output = test_case.get("expected_output", "")
     
     # Prepare request payload
-    # Check if endpoint is a guardrail service (ends with /check)
-    if endpoint_url.endswith("/check"):
-        # Guardrail format - use 'content' field
-        # Ensure context is a dict, not an array
-        context = test_case.get("context", {})
-        if isinstance(context, list):
-            context = {}  # Convert empty list to empty dict for guardrails
-        
-        payload = {
-            "content": input_data,
-            "content_type": "application/json" if input_data.startswith("{") else "text/plain",
-            "context": context,
-            "metadata": test_case.get("metadata", {})
-        }
-    else:
-        # Standard format
-        payload = {
-            "input": input_data,
-            "context": test_case.get("context", []),
-            "metadata": test_case.get("metadata", {})
-        }
+    # Always use guardrail wrapper format - use 'text' field
+    payload = {
+        "text": input_data
+    }
     
     last_error = None
     for attempt in range(retry_attempts):
@@ -379,8 +362,8 @@ async def _execute_single_test(
                     # Guardrail response - extract detected PHI types
                     actual_output = _extract_guardrail_output(response_data)
                 else:
-                    # Standard response
-                    actual_output = response_data.get("output", response_data.get("result", ""))
+                    # Guardrail wrapper or standard response - try text, then output, then result
+                    actual_output = response_data.get("text", response_data.get("output", response_data.get("result", "")))
                 
                 # Determine test status
                 status = _determine_test_status(actual_output, expected_output)
@@ -406,7 +389,13 @@ async def _execute_single_test(
                 }
             else:
                 # Non-200 response
-                last_error = f"HTTP {response.status_code}: {response.text[:200]}"
+                try:
+                    error_detail = response.text[:200] if response.text else "No response body"
+                    last_error = f"HTTP {response.status_code}: {error_detail}"
+                    logger.error(f"Non-200 response from {endpoint_url}: Status={response.status_code}, Body={error_detail}")
+                except Exception as e:
+                    last_error = f"HTTP {response.status_code}: Unable to read response - {str(e)}"
+                    logger.error(f"Failed to read error response: {str(e)}")
                 
         except httpx.TimeoutException:
             last_error = f"Request timeout after {client.timeout.total} seconds"
