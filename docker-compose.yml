@@ -22,13 +22,8 @@ services:
       APP_ENABLE_HEALTHCARE_MODE: ${APP_ENABLE_HEALTHCARE_MODE:-true}
       # CORS configuration
       APP_CORS_ORIGINS: ${APP_CORS_ORIGINS:-["http://localhost:3000","http://localhost:3001","http://localhost:8001","http://localhost:8003","http://localhost:8004"]}
-      # OpenAI/Azure OpenAI configuration for DeepTeam vulnerability scanning
+      # OpenAI configuration for DeepTeam vulnerability scanning
       OPENAI_API_KEY: ${OPENAI_API_KEY}
-      USE_AZURE_OPENAI: ${USE_AZURE_OPENAI}
-      AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT}
-      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY}
-      AZURE_OPENAI_DEPLOYMENT: ${AZURE_OPENAI_DEPLOYMENT}
-      AZURE_OPENAI_API_VERSION: ${AZURE_OPENAI_API_VERSION}
       # Redis and Celery configuration (using external Redis)
       REDIS_URL: redis://host.docker.internal:6379/2
       CELERY_BROKER_URL: redis://host.docker.internal:6379/3

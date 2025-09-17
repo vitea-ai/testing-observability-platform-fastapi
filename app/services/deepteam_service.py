@@ -28,29 +28,9 @@ class DeepTeamService:
         self.client = httpx.AsyncClient(timeout=30.0)
         # Lazy initialization - will initialize RedTeamer when needed
         self._red_teamer = None
-        
-        # Check for Azure OpenAI configuration first
-        self.use_azure = os.getenv("USE_AZURE_OPENAI", "false").lower() == "true"
-        
-        if self.use_azure:
-            # Azure OpenAI configuration
-            self.azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
-            self.azure_api_key = os.getenv("AZURE_OPENAI_API_KEY")
-            self.azure_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4")
-            self.azure_api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
-            
-            # Set OpenAI API key to Azure key for compatibility
-            if self.azure_api_key:
-                os.environ["OPENAI_API_KEY"] = self.azure_api_key
-                os.environ["OPENAI_API_TYPE"] = "azure"
-                os.environ["OPENAI_API_BASE"] = self.azure_endpoint if self.azure_endpoint else ""
-                os.environ["OPENAI_API_VERSION"] = self.azure_api_version
-                self.api_key = self.azure_api_key
-            else:
-                self.api_key = None
-        else:
-            # Standard OpenAI configuration
-            self.api_key = os.getenv("OPENAI_API_KEY")
+
+        # Standard OpenAI configuration
+        self.api_key = os.getenv("OPENAI_API_KEY")
         
     @property
     def red_teamer(self):
@@ -59,27 +39,15 @@ class DeepTeamService:
             if not self.api_key:
                 raise ValueError(
                     "OpenAI API key is required for DeepTeam vulnerability scanning. "
-                    "Please set either OPENAI_API_KEY or configure Azure OpenAI with "
-                    "USE_AZURE_OPENAI=true and related environment variables."
+                    "Please set the OPENAI_API_KEY environment variable."
                 )
-            
-            if self.use_azure:
-                # For Azure, we need to use the deployment name as the model
-                logger.info(f"Initializing RedTeamer with Azure OpenAI deployment: {self.azure_deployment}")
-                # Azure deployments typically map to specific models
-                # Use the deployment name directly
-                self._red_teamer = RedTeamer(
-                    simulator_model=self.azure_deployment,
-                    evaluation_model=self.azure_deployment,
-                    async_mode=False  # Use sync mode for compatibility
-                )
-            else:
-                # Standard OpenAI models
-                self._red_teamer = RedTeamer(
-                    simulator_model="gpt-3.5-turbo-0125",
-                    evaluation_model="gpt-4o",
-                    async_mode=False  # Use sync mode for compatibility
-                )
+
+            # Standard OpenAI models
+            self._red_teamer = RedTeamer(
+                simulator_model="gpt-3.5-turbo-0125",
+                evaluation_model="gpt-4o",
+                async_mode=False  # Use sync mode for compatibility
+            )
         return self._red_teamer
 
     async def create_model_callback(self, endpoint_url: str, headers: Optional[Dict] = None) -> Callable:
@@ -113,8 +81,8 @@ class DeepTeamService:
     async def _async_model_call(self, endpoint_url: str, prompt: str, headers: Optional[Dict] = None) -> str:
         """Make async HTTP call to model endpoint."""
         try:
-            # Check if this is a guardrail endpoint (has /guardrails/ in URL)
-            if "/guardrails/" in endpoint_url:
+            # Check if this is a guardrail endpoint (has /guardrail in URL)
+            if "/guardrail" in endpoint_url.lower():
                 # Guardrail endpoints expect {"text": "..."} format
                 request_data = {"text": prompt}
             else:
@@ -221,6 +189,7 @@ class DeepTeamService:
                 self._run_red_team,
                 model_callback,
                 vuln_objects,
+                attack_methods,
                 max_rounds
             )
             
@@ -241,9 +210,11 @@ class DeepTeamService:
             }
             
             # Parse results from RedTeamer
+            logger.info(f"Processing red team results: {results is not None}")
             if results:
                 # Get risk assessment if available
                 risk_assessment = self.red_teamer.risk_assessment
+                logger.info(f"Risk assessment available: {risk_assessment is not None}")
                 if risk_assessment:
                     for vuln_type, assessment in risk_assessment.items():
                         if assessment.get("score", 0) > 0:
@@ -276,18 +247,93 @@ class DeepTeamService:
                 "status": "failed"
             }
     
-    def _run_red_team(self, model_callback: Callable, vulnerabilities: List[BaseVulnerability], attacks_per_vuln: int) -> Any:
+    def _run_red_team(self, model_callback: Callable, vulnerabilities: List[BaseVulnerability], attack_method_names: Optional[List[str]], attacks_per_vuln: int) -> Any:
         """Run red teaming synchronously."""
         try:
+            logger.info(f"Starting red_team with {len(vulnerabilities)} vulnerabilities, {attacks_per_vuln} attacks each")
+            logger.info(f"Attack methods requested: {attack_method_names}")
+
+            # Import all available attack classes
+            from deepteam.attacks.single_turn import (
+                PromptInjection,
+                SystemOverride,
+                Roleplay,
+                GrayBox,
+                ContextPoisoning,
+                GoalRedirection,
+                PermissionEscalation,
+                LinguisticConfusion,
+                Multilingual,
+                MathProblem,
+                Base64,
+                ROT13,
+                Leetspeak,
+                InputBypass,
+                PromptProbing
+            )
+
+            # Map attack names to classes
+            attack_map = {
+                'PromptInjection': PromptInjection,
+                'SystemOverride': SystemOverride,
+                'Roleplay': Roleplay,
+                'GrayBox': GrayBox,
+                'ContextPoisoning': ContextPoisoning,
+                'GoalRedirection': GoalRedirection,
+                'PermissionEscalation': PermissionEscalation,
+                'LinguisticConfusion': LinguisticConfusion,
+                'Multilingual': Multilingual,
+                'MathProblem': MathProblem,
+                'Base64': Base64,
+                'ROT13': ROT13,
+                'Leetspeak': Leetspeak,
+                'InputBypass': InputBypass,
+                'PromptProbing': PromptProbing
+            }
+
+            # Create attack instances based on requested methods
+            if attack_method_names:
+                attacks = []
+                for method_name in attack_method_names:
+                    if method_name in attack_map:
+                        attacks.append(attack_map[method_name]())
+                        logger.info(f"Added attack method: {method_name}")
+                    else:
+                        logger.warning(f"Unknown attack method requested: {method_name}")
+
+                # If no valid attacks were found, use defaults
+                if not attacks:
+                    logger.info("No valid attack methods specified, using defaults")
+                    attacks = [
+                        PromptInjection(),
+                        SystemOverride(),
+                        Roleplay()
+                    ]
+            else:
+                # Default attacks if none specified
+                logger.info("No attack methods specified, using defaults")
+                attacks = [
+                    PromptInjection(),
+                    SystemOverride(),
+                    Roleplay()
+                ]
+
+            logger.info(f"Using {len(attacks)} attack methods: {[type(a).__name__ for a in attacks]}")
+
             result = self.red_teamer.red_team(
                 model_callback=model_callback,
                 vulnerabilities=vulnerabilities,
+                attacks=attacks,  # Add attacks parameter
                 attacks_per_vulnerability_type=attacks_per_vuln,
                 ignore_errors=True
             )
+
+            logger.info(f"Red team result type: {type(result)}")
+            logger.info(f"Red team result: {result}")
+
             return result
         except Exception as e:
-            logger.error(f"Error in red_team execution: {e}")
+            logger.error(f"Error in red_team execution: {e}", exc_info=True)
             return None
     
     def _classify_severity_by_score(self, score: float) -> str:

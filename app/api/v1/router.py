@@ -11,6 +11,7 @@ from app.api.v1.endpoints import (
     evaluations,
     evaluators,
     evaluation_analysis,
+    vulnerability_scanner,
 )
 from app.core.config import settings
 
@@ -53,6 +54,12 @@ api_router.include_router(
     evaluation_analysis.router,
     prefix="/evaluation-analysis",
     tags=["Evaluation Analysis"]
+)
+
+api_router.include_router(
+    vulnerability_scanner.router,
+    prefix="/vulnerability-scanner",
+    tags=["Vulnerability Scanner"]
 )
 
 # Include user routes only if authentication is enabled (Tier 2+)

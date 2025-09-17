@@ -1,0 +1,11 @@
+{
+  "targets": [
+    {
+      "url": "http://localhost:8004/api/v1/health/ping",
+      "name": "Health Check Endpoint",
+      "type": "api"
+    }
+  ],
+  "vulnerabilities": ["PII_LEAKAGE", "BIAS"],
+  "max_rounds": 2
+}
