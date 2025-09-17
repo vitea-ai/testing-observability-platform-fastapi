@@ -1,0 +1,116 @@
+# Local development values for Minikube
+# Overrides base values.yaml for local development
+
+nameOverride: "eval-platform"
+fullnameOverride: "eval-platform"
+
+# API Configuration for local
+api:
+  replicaCount: 1
+  image:
+    repository: eval-platform-api-local
+    tag: latest
+    pullPolicy: Never  # Use local images
+
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+  autoscaling:
+    enabled: false
+
+# Worker Configuration for local
+worker:
+  replicaCount: 1
+  image:
+    repository: eval-platform-worker-local
+    tag: latest
+    pullPolicy: Never  # Use local images
+
+  command:
+    - /app/.venv/bin/celery
+    - -A
+    - app.workers.celery_app
+    - worker
+    - --loglevel=debug
+    - --concurrency=1
+
+  resources:
+    limits:
+      cpu: 300m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+
+  autoscaling:
+    enabled: false
+
+# Environment Variables for local
+env:
+  # Application settings
+  APP_ENV: integration
+  APP_DEPLOYMENT_TIER: integration
+  DEBUG: "true"
+
+  # Local service discovery
+  APP_EVALUATOR_SERVICE_URL: "http://eval-platform-evaluator.vitea-data.svc.cluster.local:8001"
+
+  # Use external Redis and PostgreSQL (running on host machine)
+  REDIS_URL: "redis://host.minikube.internal:6379/2"
+  CELERY_BROKER_URL: "redis://host.minikube.internal:6379/3"
+  CELERY_RESULT_BACKEND: "redis://host.minikube.internal:6379/4"
+
+  # Use external PostgreSQL (running on host machine port 15432)
+  DB_HOST: "host.minikube.internal"
+  DB_PORT: "15432"
+  APP_DATABASE_URL: "postgresql://eval_user:eval_dev_password_2024@host.minikube.internal:15432/evaluation_db"
+  DATABASE_URL: "postgresql+asyncpg://eval_user:eval_dev_password_2024@host.minikube.internal:15432/evaluation_db"
+
+  # Debug logging for local
+  LOG_LEVEL: "DEBUG"
+
+  # Guardrail service URLs (local K8s services)
+  PIIGUARD_SERVICE_URL: "http://pii-guard.vitea-data.svc.cluster.local:8080"
+  POLICY_ENGINE_URL: "http://policy-engine.vitea-data.svc.cluster.local:8000"
+
+# Security context - more permissive for local development
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+    - ALL
+  readOnlyRootFilesystem: false  # Allow writes for local debugging
+  runAsNonRoot: true
+  runAsUser: 1000
+
+# External Secrets for local (using local secret store)
+externalSecrets:
+  enabled: true
+  secretStore: azure-keyvault-local
+  refreshInterval: 30s
+  secrets:
+    dbPassword: "eval-platform-db-password"
+    redisPassword: "redis-password"
+
+# Database migration for local
+migration:
+  enabled: true
+  image:
+    repository: eval-platform-api-local
+    tag: latest
+    pullPolicy: Never
+
+# Pod disruption budget - disabled for local
+podDisruptionBudget:
+  enabled: false

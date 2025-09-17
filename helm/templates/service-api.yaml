@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "eval-platform.fullname" . }}-api
+  namespace: vitea-data
+  labels:
+    {{- include "eval-platform.apiLabels" . | nindent 4 }}
+spec:
+  type: {{ .Values.api.service.type }}
+  ports:
+    - port: {{ .Values.api.service.port }}
+      targetPort: {{ .Values.api.service.targetPort }}
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "eval-platform.apiSelectorLabels" . | nindent 4 }}

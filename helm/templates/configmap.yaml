@@ -1,0 +1,50 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "eval-platform.fullname" . }}-config
+  namespace: vitea-data
+  labels:
+    {{- include "eval-platform.labels" . | nindent 4 }}
+data:
+  # Application settings
+  APP_ENV: {{ .Values.env.APP_ENV | quote }}
+  APP_PORT: {{ .Values.env.APP_PORT | quote }}
+  APP_DEPLOYMENT_TIER: {{ .Values.env.APP_DEPLOYMENT_TIER | quote }}
+  APP_ENABLE_AUTHENTICATION: {{ .Values.env.APP_ENABLE_AUTHENTICATION | quote }}
+  APP_ENABLE_AUDIT_LOGGING: {{ .Values.env.APP_ENABLE_AUDIT_LOGGING | quote }}
+  APP_ENABLE_HEALTHCARE_MODE: {{ .Values.env.APP_ENABLE_HEALTHCARE_MODE | quote }}
+
+  # CORS configuration
+  APP_CORS_ORIGINS: {{ .Values.env.APP_CORS_ORIGINS | quote }}
+
+  # Service discovery
+  APP_EVALUATOR_SERVICE_URL: {{ .Values.env.APP_EVALUATOR_SERVICE_URL | quote }}
+
+  # Guardrail service URLs
+  PIIGUARD_SERVICE_URL: {{ .Values.env.PIIGUARD_SERVICE_URL | quote }}
+  POLICY_ENGINE_URL: {{ .Values.env.POLICY_ENGINE_URL | quote }}
+
+  # Redis configuration
+  REDIS_HOST: {{ .Values.env.REDIS_HOST | quote }}
+  REDIS_PORT: {{ .Values.env.REDIS_PORT | quote }}
+  REDIS_URL: {{ .Values.env.REDIS_URL | quote }}
+  CELERY_BROKER_URL: {{ .Values.env.CELERY_BROKER_URL | quote }}
+  CELERY_RESULT_BACKEND: {{ .Values.env.CELERY_RESULT_BACKEND | quote }}
+
+  # Database configuration (non-sensitive)
+  DB_HOST: {{ .Values.env.DB_HOST | quote }}
+  DB_PORT: {{ .Values.env.DB_PORT | quote }}
+  DB_NAME: {{ .Values.env.DB_NAME | quote }}
+  DB_USER: {{ .Values.env.DB_USER | quote }}
+
+  # OpenTelemetry configuration
+  OTEL_SERVICE_NAME: {{ .Values.env.OTEL_SERVICE_NAME | quote }}
+  ENABLE_METRICS: {{ .Values.env.ENABLE_METRICS | quote }}
+
+  # Logging
+  LOG_LEVEL: {{ .Values.env.LOG_LEVEL | quote }}
+  LOG_FORMAT: {{ .Values.env.LOG_FORMAT | quote }}
+
+  {{- if .Values.env.DEBUG }}
+  DEBUG: {{ .Values.env.DEBUG | quote }}
+  {{- end }}

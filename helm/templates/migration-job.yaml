@@ -1,0 +1,81 @@
+{{- if .Values.migration.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "eval-platform.fullname" . }}-migration
+  namespace: vitea-data
+  labels:
+    {{- include "eval-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migration
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "eval-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migration
+    spec:
+      restartPolicy: Never
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "eval-platform.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+
+      # Init container to wait for database
+      initContainers:
+        - name: wait-for-db
+          image: postgres:15-alpine
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h $DB_HOST -p $DB_PORT -U $DB_USER; do
+                echo "Waiting for database..."
+                sleep 2
+              done
+              echo "Database is ready!"
+          envFrom:
+            - configMapRef:
+                name: {{ include "eval-platform.fullname" . }}-config
+          {{- if .Values.externalSecrets.enabled }}
+            - secretRef:
+                name: {{ include "eval-platform.fullname" . }}-secrets
+          {{- end }}
+
+      containers:
+        - name: migration
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.migration.image.repository }}:{{ .Values.migration.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.migration.image.pullPolicy }}
+          command:
+            {{- toYaml .Values.migration.command | nindent 12 }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "eval-platform.fullname" . }}-config
+          {{- if .Values.externalSecrets.enabled }}
+            - secretRef:
+                name: {{ include "eval-platform.fullname" . }}-secrets
+          {{- end }}
+          env:
+            # Override database URLs to include password from secret
+            {{- if .Values.externalSecrets.enabled }}
+            - name: APP_DATABASE_URL
+              value: "postgresql://{{ .Values.env.DB_USER }}:$(dbPassword)@{{ .Values.env.DB_HOST }}:{{ .Values.env.DB_PORT }}/{{ .Values.env.DB_NAME }}"
+            - name: DATABASE_URL
+              value: "postgresql+asyncpg://{{ .Values.env.DB_USER }}:$(dbPassword)@{{ .Values.env.DB_HOST }}:{{ .Values.env.DB_PORT }}/{{ .Values.env.DB_NAME }}"
+            {{- end }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}

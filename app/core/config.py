@@ -10,7 +10,7 @@ from functools import lru_cache
 from typing import Any, Dict, List, Optional, Union
 from enum import Enum
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -52,8 +52,8 @@ class Settings(BaseSettings):
     version: str = Field(default="0.1.0", description="Application version")
     env: str = Field(default="development", description="Environment name")
     debug: bool = Field(default=True, description="Debug mode")
-    host: str = Field(default="0.0.0.0", description="Host to bind")
-    port: int = Field(default=8000, description="Port to bind")
+    host: str = Field(description="Host to bind")
+    port: int = Field(description="Port to bind")
     
     # Deployment tier - controls feature availability
     deployment_tier: DeploymentTier = Field(
@@ -106,7 +106,7 @@ class Settings(BaseSettings):
     # Database Configuration (Tier 2+)
     # ==========================================
     database_url: Optional[str] = Field(
-        default="postgresql://dbadmin:postgres123@localhost:5433/evaluation_db",
+        default=None,
         description="Database connection URL"
     )
     database_pool_size: int = Field(default=20)
@@ -122,12 +122,12 @@ class Settings(BaseSettings):
     # ==========================================
     # Celery Configuration (for async task processing)
     # ==========================================
-    celery_broker_url: str = Field(
-        default="redis://localhost:6379/0",
+    celery_broker_url: Optional[str] = Field(
+        default=None,
         description="Celery broker URL (Redis)"
     )
-    celery_result_backend: str = Field(
-        default="redis://localhost:6379/0",
+    celery_result_backend: Optional[str] = Field(
+        default=None,
         description="Celery result backend URL"
     )
     celery_task_default_queue: str = Field(
@@ -147,7 +147,6 @@ class Settings(BaseSettings):
     # Security Configuration
     # ==========================================
     secret_key: str = Field(
-        default="your-secret-key-change-in-production",
         description="Secret key for JWT encoding"
     )
     jwt_algorithm: str = Field(default="HS256")
@@ -185,7 +184,6 @@ class Settings(BaseSettings):
     # ==========================================
     # Evaluator Service
     evaluator_service_url: str = Field(
-        default="http://localhost:9002",
         description="URL for the AI evaluator service"
     )
     evaluator_timeout: int = Field(default=300, description="Timeout for evaluator calls in seconds")
@@ -208,6 +206,31 @@ class Settings(BaseSettings):
         if v not in [tier.value for tier in DeploymentTier]:
             raise ValueError(f"Invalid deployment tier: {v}")
         return v
+
+    @model_validator(mode='after')
+    def validate_tier_requirements(self):
+        """Ensure required settings are present for the deployment tier."""
+
+        # Integration tier and above requires database
+        if self.deployment_tier in [DeploymentTier.INTEGRATION, DeploymentTier.STAGING, DeploymentTier.PRODUCTION]:
+            if not self.database_url:
+                raise ValueError("APP_DATABASE_URL is required for integration tier and above")
+
+        # Staging tier and above requires Redis and secure secrets
+        if self.deployment_tier in [DeploymentTier.STAGING, DeploymentTier.PRODUCTION]:
+            if not self.redis_url:
+                raise ValueError("APP_REDIS_URL is required for staging tier and above")
+            if not self.secret_key:
+                raise ValueError("APP_SECRET_KEY is required for staging tier and above")
+
+        # Production tier requires additional security settings
+        if self.deployment_tier == DeploymentTier.PRODUCTION:
+            if not self.vault_url:
+                raise ValueError("APP_VAULT_URL is required for production tier")
+            if not self.enable_field_encryption:
+                raise ValueError("APP_ENABLE_FIELD_ENCRYPTION must be true for production tier")
+
+        return self
     
     def get_enabled_features(self) -> Dict[str, bool]:
         """Get all enabled features based on tier and configuration."""
@@ -297,20 +320,24 @@ class Settings(BaseSettings):
         if self.testing:
             return self.test_database_url
         return self.database_url or "sqlite:///./test.db"
-    
+
     def get_celery_broker_url(self) -> str:
         """Get Celery broker URL with fallback to redis_url."""
         if self.redis_url:
             # Use redis_url if provided (for production environments)
             return self.redis_url.replace("/0", "/1")  # Use database 1 for Celery
-        return self.celery_broker_url
-    
+        if self.celery_broker_url:
+            return self.celery_broker_url
+        raise ValueError("Either APP_REDIS_URL or APP_CELERY_BROKER_URL must be provided")
+
     def get_celery_result_backend(self) -> str:
         """Get Celery result backend URL with fallback to redis_url."""
         if self.redis_url:
             # Use redis_url if provided (for production environments)
             return self.redis_url.replace("/0", "/2")  # Use database 2 for results
-        return self.celery_result_backend
+        if self.celery_result_backend:
+            return self.celery_result_backend
+        raise ValueError("Either APP_REDIS_URL or APP_CELERY_RESULT_BACKEND must be provided")
 
 
 @lru_cache()
