@@ -13,7 +13,8 @@ celery_app = Celery(
     backend=settings.get_celery_result_backend(),
     include=[
         "app.workers.tasks.evaluation_tasks",
-        "app.workers.tasks.experiment_runner_tasks"
+        "app.workers.tasks.experiment_runner_tasks",
+        "app.workers.tasks.vulnerability_scan_tasks"
     ]
 )
 
@@ -41,8 +42,11 @@ celery_app.conf.update(
 # Task routing configuration
 celery_app.conf.task_routes = {
     "app.workers.tasks.evaluation_tasks.*": {"queue": "evaluations"},
-    "app.workers.tasks.experiment_runner_tasks.*": {"queue": "default"},
-    "run_automated_experiment": {"queue": "default"},
+    "app.workers.tasks.experiment_runner_tasks.*": {"queue": "experiments"},
+    "app.workers.tasks.vulnerability_scan_tasks.*": {"queue": "vulnerability_scans"},
+    "evaluate_experiment": {"queue": "evaluations"},
+    "run_automated_experiment": {"queue": "experiments"},
+    "run_vulnerability_scan": {"queue": "vulnerability_scans"},
 }
 
 # Default queue configurations
@@ -57,11 +61,25 @@ celery_app.conf.task_queues = {
         "exchange": "evaluations",
         "exchange_type": "direct",
         "routing_key": "evaluation.task",
+        "priority": 5,  # Medium priority
+    },
+    "experiments": {
+        "exchange": "experiments",
+        "exchange_type": "direct",
+        "routing_key": "experiment.task",
+        "priority": 5,  # Medium priority
+    },
+    "vulnerability_scans": {
+        "exchange": "vulnerability_scans",
+        "exchange_type": "direct",
+        "routing_key": "vulnerability.task",
+        "priority": 3,  # Lower priority (resource intensive)
     },
     "default": {
         "exchange": "default",
         "exchange_type": "direct",
         "routing_key": "default",
+        "priority": 5,
     },
 }
 

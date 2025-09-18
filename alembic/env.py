@@ -21,7 +21,8 @@ from app.models import (
     Experiment,
     TestResult,
     Evaluation,
-    EvaluationMetric
+    EvaluationMetric,
+    VulnerabilityScan
 )
 
 # this is the Alembic Config object

@@ -13,26 +13,22 @@ services:
       APP_HOST: ${APP_HOST:-0.0.0.0}
       APP_PORT: ${APP_PORT:-8000}
       APP_SECRET_KEY: ${APP_SECRET_KEY:-your-secret-key-change-in-production}
-      APP_DATABASE_URL: postgresql://evaladmin:postgres123@host.docker.internal:15432/evaluation_db
-      DATABASE_URL: postgresql+asyncpg://evaladmin:postgres123@host.docker.internal:15432/evaluation_db
-      APP_REDIS_URL: redis://host.docker.internal:6379/2
+      APP_DATABASE_URL: ${APP_DATABASE_URL}
+      DATABASE_URL: ${DATABASE_URL}
+      APP_REDIS_URL: ${APP_REDIS_URL}
       APP_EVALUATOR_SERVICE_URL: ${APP_EVALUATOR_SERVICE_URL}
+      APP_DEPLOYMENT_TIER: ${APP_DEPLOYMENT_TIER}
       APP_ENABLE_AUTHENTICATION: ${APP_ENABLE_AUTHENTICATION:-false}
       APP_ENABLE_AUDIT_LOGGING: ${APP_ENABLE_AUDIT_LOGGING:-true}
       APP_ENABLE_HEALTHCARE_MODE: ${APP_ENABLE_HEALTHCARE_MODE:-true}
       # CORS configuration
       APP_CORS_ORIGINS: ${APP_CORS_ORIGINS:-["http://localhost:3000","http://localhost:3001","http://localhost:8001","http://localhost:8003","http://localhost:8004"]}
-      # OpenAI/Azure OpenAI configuration for DeepTeam vulnerability scanning
+      # OpenAI configuration for DeepTeam vulnerability scanning
       OPENAI_API_KEY: ${OPENAI_API_KEY}
-      USE_AZURE_OPENAI: ${USE_AZURE_OPENAI}
-      AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT}
-      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY}
-      AZURE_OPENAI_DEPLOYMENT: ${AZURE_OPENAI_DEPLOYMENT}
-      AZURE_OPENAI_API_VERSION: ${AZURE_OPENAI_API_VERSION}
       # Redis and Celery configuration (using external Redis)
-      REDIS_URL: redis://host.docker.internal:6379/2
-      CELERY_BROKER_URL: redis://host.docker.internal:6379/3
-      CELERY_RESULT_BACKEND: redis://host.docker.internal:6379/4
+      REDIS_URL: ${REDIS_URL}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
       # OpenTelemetry configuration for observability
       OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-http://host.docker.internal:10318/v1/traces}
       OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: ${OTEL_EXPORTER_OTLP_LOGS_ENDPOINT:-http://host.docker.internal:10318/v1/logs}
@@ -94,17 +90,18 @@ services:
       APP_HOST: ${APP_HOST:-0.0.0.0}
       APP_PORT: ${APP_PORT:-8000}
       APP_SECRET_KEY: ${APP_SECRET_KEY:-your-secret-key-change-in-production}
-      APP_DATABASE_URL: postgresql://evaladmin:postgres123@host.docker.internal:15432/evaluation_db
-      DATABASE_URL: postgresql://evaladmin:postgres123@host.docker.internal:15432/evaluation_db
-      APP_REDIS_URL: redis://host.docker.internal:6379/2
-      REDIS_URL: redis://host.docker.internal:6379/2
-      CELERY_BROKER_URL: redis://host.docker.internal:6379/3
-      CELERY_RESULT_BACKEND: redis://host.docker.internal:6379/4
+      APP_DATABASE_URL: ${APP_DATABASE_URL}
+      DATABASE_URL: ${DATABASE_URL}
+      APP_REDIS_URL: ${APP_REDIS_URL}
+      REDIS_URL: ${REDIS_URL}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
       APP_EVALUATOR_SERVICE_URL: ${APP_EVALUATOR_SERVICE_URL}
-      APP_DEPLOYMENT_TIER: integration
+      APP_DEPLOYMENT_TIER: ${APP_DEPLOYMENT_TIER}
       APP_ENABLE_AUTHENTICATION: ${APP_ENABLE_AUTHENTICATION:-false}
       APP_ENABLE_AUDIT_LOGGING: ${APP_ENABLE_AUDIT_LOGGING:-true}
       APP_ENABLE_HEALTHCARE_MODE: ${APP_ENABLE_HEALTHCARE_MODE:-true}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
     # External services - no depends_on needed
     # depends_on:
     #   eval-postgres-fastapi:
@@ -116,7 +113,7 @@ services:
     networks:
       - vitea-shared-network
     restart: unless-stopped
-    command: sh -c "cd /app && /app/.venv/bin/celery -A app.workers.celery_app worker --loglevel=info --concurrency=2"
+    command: sh -c "cd /app && /app/.venv/bin/celery -A app.workers.celery_app worker --loglevel=info --concurrency=2 -Q evaluations,experiments,vulnerability_scans,default"
     labels:
       - "logs.collect=true"
       - "logs.service=testing-observability-celery"
