@@ -14,6 +14,10 @@ from app.models.evaluation import (
     Evaluation,
     EvaluationMetric
 )
+from app.models.vulnerability_scan import (
+    VulnerabilityScan,
+    VulnerabilityScanStatus
+)
 
 __all__ = [
     # Base classes
@@ -35,4 +39,8 @@ __all__ = [
     # Evaluation models
     "Evaluation",
     "EvaluationMetric",
+
+    # Vulnerability scan models
+    "VulnerabilityScan",
+    "VulnerabilityScanStatus",
 ]
