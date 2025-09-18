@@ -1,14 +1,14 @@
 # Local development values for Minikube
 # Overrides base values.yaml for local development
 
-nameOverride: "eval-platform"
-fullnameOverride: "eval-platform"
+nameOverride: "evaluator"
+fullnameOverride: "evaluator"
 
 # API Configuration for local
 api:
   replicaCount: 1
   image:
-    repository: eval-platform-api-local
+    repository: evaluator-api-local
     tag: latest
     pullPolicy: Never  # Use local images
 
@@ -23,11 +23,21 @@ api:
   autoscaling:
     enabled: false
 
+  # Development command with reload
+  command:
+    - /app/.venv/bin/uvicorn
+    - app.main:app
+    - --host
+    - "0.0.0.0"
+    - --port
+    - "8000"
+    - --reload
+
 # Worker Configuration for local
 worker:
   replicaCount: 1
   image:
-    repository: eval-platform-worker-local
+    repository: evaluator-worker-local
     tag: latest
     pullPolicy: Never  # Use local images
 
@@ -50,6 +60,33 @@ worker:
   autoscaling:
     enabled: false
 
+# Evaluator Service Configuration for local
+evaluator:
+  replicaCount: 1
+  image:
+    repository: evaluator-service-local
+    tag: latest
+    pullPolicy: Never  # Use local images
+
+  service:
+    type: ClusterIP
+    port: 8001
+    targetPort: 8001
+
+  env:
+    LOG_LEVEL: "DEBUG"
+
+  resources:
+    limits:
+      cpu: 300m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+  autoscaling:
+    enabled: false
+
 # Environment Variables for local
 env:
   # Application settings
@@ -68,8 +105,19 @@ env:
   # Use external PostgreSQL (running on host machine port 15432)
   DB_HOST: "host.minikube.internal"
   DB_PORT: "15432"
-  APP_DATABASE_URL: "postgresql://eval_user:eval_dev_password_2024@host.minikube.internal:15432/evaluation_db"
-  DATABASE_URL: "postgresql+asyncpg://eval_user:eval_dev_password_2024@host.minikube.internal:15432/evaluation_db"
+  DB_USER: "evaladmin"
+  DB_NAME: "evaluation_db"
+  APP_DATABASE_URL: "postgresql://evaladmin:postgres123@host.minikube.internal:15432/evaluation_db"
+  DATABASE_URL: "postgresql+asyncpg://evaladmin:postgres123@host.minikube.internal:15432/evaluation_db"
+
+  # OpenTelemetry endpoints (pointing to host machine)
+  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://host.minikube.internal:10318/v1/traces"
+  OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "http://host.minikube.internal:10318/v1/logs"
+
+  # Additional guardrail services (using Docker Compose names mapped to K8s services)
+  SECRETS_DETECTOR_SERVICE_URL: "http://secrets-detector.vitea-data.svc.cluster.local:8081"
+  PROFANITY_GUARD_SERVICE_URL: "http://profanity-guard.vitea-data.svc.cluster.local:8082"
+  JAILBREAK_GUARD_SERVICE_URL: "http://jailbreak-guard.vitea-data.svc.cluster.local:8086"
 
   # Debug logging for local
   LOG_LEVEL: "DEBUG"
@@ -94,20 +142,23 @@ securityContext:
   runAsNonRoot: true
   runAsUser: 1000
 
-# External Secrets for local (using local secret store)
+# External Secrets for local (disabled since using hardcoded values for dev)
 externalSecrets:
-  enabled: true
+  enabled: false
   secretStore: azure-keyvault-local
   refreshInterval: 30s
   secrets:
     dbPassword: "eval-platform-db-password"
     redisPassword: "redis-password"
+    appSecretKey: "eval-platform-secret-key"
+    # openaiApiKey: "openai-api-key"  # uncomment if needed
+    # azureOpenaiApiKey: "azure-openai-api-key"  # uncomment if needed
 
 # Database migration for local
 migration:
   enabled: true
   image:
-    repository: eval-platform-api-local
+    repository: evaluator-api-local
     tag: latest
     pullPolicy: Never
 

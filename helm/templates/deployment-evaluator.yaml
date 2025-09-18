@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "eval-platform.fullname" . }}-evaluator
+  namespace: vitea-data
+  labels:
+    {{- include "eval-platform.evaluatorLabels" . | nindent 4 }}
+spec:
+  {{- if not .Values.evaluator.autoscaling.enabled }}
+  replicas: {{ .Values.evaluator.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "eval-platform.evaluatorSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      labels:
+        {{- include "eval-platform.evaluatorSelectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "eval-platform.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+
+      containers:
+        - name: evaluator
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.evaluator.image.repository }}:{{ .Values.evaluator.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.evaluator.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.evaluator.service.targetPort }}
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: {{ .Values.evaluator.env.LOG_LEVEL | default "INFO" | quote }}
+          {{- if .Values.healthChecks.evaluator.livenessProbe }}
+          livenessProbe:
+            {{- toYaml .Values.healthChecks.evaluator.livenessProbe | nindent 12 }}
+          {{- end }}
+          {{- if .Values.healthChecks.evaluator.readinessProbe }}
+          readinessProbe:
+            {{- toYaml .Values.healthChecks.evaluator.readinessProbe | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.evaluator.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: app-cache
+              mountPath: /app/.cache
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: app-cache
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

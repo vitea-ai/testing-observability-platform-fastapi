@@ -92,6 +92,22 @@ app.kubernetes.io/component: worker
 {{- end }}
 
 {{/*
+Evaluator component labels
+*/}}
+{{- define "eval-platform.evaluatorLabels" -}}
+{{ include "eval-platform.labels" . }}
+app.kubernetes.io/component: evaluator
+{{- end }}
+
+{{/*
+Evaluator selector labels
+*/}}
+{{- define "eval-platform.evaluatorSelectorLabels" -}}
+{{ include "eval-platform.selectorLabels" . }}
+app.kubernetes.io/component: evaluator
+{{- end }}
+
+{{/*
 Database URL construction
 */}}
 {{- define "eval-platform.databaseUrl" -}}

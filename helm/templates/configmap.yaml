@@ -8,6 +8,7 @@ metadata:
 data:
   # Application settings
   APP_ENV: {{ .Values.env.APP_ENV | quote }}
+  APP_HOST: {{ .Values.env.APP_HOST | default "0.0.0.0" | quote }}
   APP_PORT: {{ .Values.env.APP_PORT | quote }}
   APP_DEPLOYMENT_TIER: {{ .Values.env.APP_DEPLOYMENT_TIER | quote }}
   APP_ENABLE_AUTHENTICATION: {{ .Values.env.APP_ENABLE_AUTHENTICATION | quote }}
@@ -23,6 +24,15 @@ data:
   # Guardrail service URLs
   PIIGUARD_SERVICE_URL: {{ .Values.env.PIIGUARD_SERVICE_URL | quote }}
   POLICY_ENGINE_URL: {{ .Values.env.POLICY_ENGINE_URL | quote }}
+  {{- if .Values.env.SECRETS_DETECTOR_SERVICE_URL }}
+  SECRETS_DETECTOR_SERVICE_URL: {{ .Values.env.SECRETS_DETECTOR_SERVICE_URL | quote }}
+  {{- end }}
+  {{- if .Values.env.PROFANITY_GUARD_SERVICE_URL }}
+  PROFANITY_GUARD_SERVICE_URL: {{ .Values.env.PROFANITY_GUARD_SERVICE_URL | quote }}
+  {{- end }}
+  {{- if .Values.env.JAILBREAK_GUARD_SERVICE_URL }}
+  JAILBREAK_GUARD_SERVICE_URL: {{ .Values.env.JAILBREAK_GUARD_SERVICE_URL | quote }}
+  {{- end }}
 
   # Redis configuration
   REDIS_HOST: {{ .Values.env.REDIS_HOST | quote }}
@@ -37,8 +47,28 @@ data:
   DB_NAME: {{ .Values.env.DB_NAME | quote }}
   DB_USER: {{ .Values.env.DB_USER | quote }}
 
+  # OpenAI/Azure OpenAI configuration (if provided)
+  {{- if .Values.env.USE_AZURE_OPENAI }}
+  USE_AZURE_OPENAI: {{ .Values.env.USE_AZURE_OPENAI | quote }}
+  {{- end }}
+  {{- if .Values.env.AZURE_OPENAI_ENDPOINT }}
+  AZURE_OPENAI_ENDPOINT: {{ .Values.env.AZURE_OPENAI_ENDPOINT | quote }}
+  {{- end }}
+  {{- if .Values.env.AZURE_OPENAI_DEPLOYMENT }}
+  AZURE_OPENAI_DEPLOYMENT: {{ .Values.env.AZURE_OPENAI_DEPLOYMENT | quote }}
+  {{- end }}
+  {{- if .Values.env.AZURE_OPENAI_API_VERSION }}
+  AZURE_OPENAI_API_VERSION: {{ .Values.env.AZURE_OPENAI_API_VERSION | quote }}
+  {{- end }}
+
   # OpenTelemetry configuration
   OTEL_SERVICE_NAME: {{ .Values.env.OTEL_SERVICE_NAME | quote }}
+  {{- if .Values.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT }}
+  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: {{ .Values.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT | quote }}
+  {{- end }}
+  {{- if .Values.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT }}
+  OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: {{ .Values.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT | quote }}
+  {{- end }}
   ENABLE_METRICS: {{ .Values.env.ENABLE_METRICS | quote }}
 
   # Logging

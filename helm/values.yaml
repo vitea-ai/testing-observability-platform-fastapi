@@ -1,14 +1,14 @@
 # Base values for eval-platform
 # Default configuration for dev/prod environments
 
-nameOverride: "eval-platform"
-fullnameOverride: "eval-platform"
+nameOverride: "evaluator"
+fullnameOverride: "evaluator"
 
 # API Configuration
 api:
   replicaCount: 2
   image:
-    repository: viteadevacr.azurecr.io/eval-platform-api
+    repository: viteadevacr.azurecr.io/evaluator-api
     tag: latest
     pullPolicy: IfNotPresent
 
@@ -16,6 +16,15 @@ api:
     type: ClusterIP
     port: 8000
     targetPort: 8000
+
+  # Production command (no reload)
+  command:
+    - /app/.venv/bin/uvicorn
+    - app.main:app
+    - --host
+    - "0.0.0.0"
+    - --port
+    - "8000"
 
   resources:
     limits:
@@ -36,7 +45,7 @@ api:
 worker:
   replicaCount: 2
   image:
-    repository: viteadevacr.azurecr.io/eval-platform-worker
+    repository: viteadevacr.azurecr.io/evaluator-worker
     tag: latest
     pullPolicy: IfNotPresent
 
@@ -60,6 +69,36 @@ worker:
     enabled: true
     minReplicas: 1
     maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+
+# Evaluator Service Configuration (AI Evaluator from vitea-evaluators repo)
+evaluator:
+  replicaCount: 1
+  image:
+    repository: viteadevacr.azurecr.io/evaluator-service
+    tag: latest
+    pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP
+    port: 8001
+    targetPort: 8001
+
+  env:
+    LOG_LEVEL: "INFO"
+
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 200m
+      memory: 256Mi
+
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 4
     targetCPUUtilizationPercentage: 70
 
 # Environment Variables
@@ -94,6 +133,21 @@ env:
   DB_PORT: "5432"
   DB_NAME: "evaluation_db"
   DB_USER: "eval_user"
+
+  # Additional guardrail services (optional)
+  # SECRETS_DETECTOR_SERVICE_URL: "http://secrets-detector.vitea-data.svc.cluster.local:8081"
+  # PROFANITY_GUARD_SERVICE_URL: "http://profanity-guard.vitea-data.svc.cluster.local:8082"
+  # JAILBREAK_GUARD_SERVICE_URL: "http://jailbreak-guard.vitea-data.svc.cluster.local:8086"
+
+  # OpenTelemetry configuration (optional)
+  # OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://otel-collector.vitea-infra.svc.cluster.local:4317/v1/traces"
+  # OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "http://otel-collector.vitea-infra.svc.cluster.local:4317/v1/logs"
+
+  # OpenAI/Azure OpenAI configuration (optional - secrets in external-secret)
+  # USE_AZURE_OPENAI: "false"
+  # AZURE_OPENAI_ENDPOINT: ""
+  # AZURE_OPENAI_DEPLOYMENT: ""
+  # AZURE_OPENAI_API_VERSION: "2024-02-15-preview"
 
   # OpenTelemetry configuration
   OTEL_SERVICE_NAME: "eval-platform"
@@ -146,7 +200,7 @@ externalSecrets:
 migration:
   enabled: true
   image:
-    repository: viteadevacr.azurecr.io/eval-platform-api
+    repository: viteadevacr.azurecr.io/evaluator-api
     tag: latest
     pullPolicy: IfNotPresent
   command:
@@ -182,3 +236,16 @@ healthChecks:
         - ping
       initialDelaySeconds: 60
       periodSeconds: 30
+  evaluator:
+    livenessProbe:
+      httpGet:
+        path: /health
+        port: 8001
+      initialDelaySeconds: 30
+      periodSeconds: 10
+    readinessProbe:
+      httpGet:
+        path: /health
+        port: 8001
+      initialDelaySeconds: 10
+      periodSeconds: 5
